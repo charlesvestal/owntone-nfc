@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from nfc_jukebox.owntone import OwnTone
+from nfc_jukebox.owntone import ALBUM_EXPRESSION, OwnTone
 
 BASE = "http://test:3689"
 
@@ -80,3 +80,36 @@ def test_raises_on_server_error(client):
     respx.get(f"{BASE}/api/outputs").mock(return_value=httpx.Response(500))
     with pytest.raises(httpx.HTTPStatusError):
         client.selected_output_ids()
+
+
+@respx.mock
+def test_play_album_escapes_double_quotes_in_path(client):
+    route = respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
+        return_value=httpx.Response(200, json={"count": 3})
+    )
+    client.play_album('Various/12" Singles')
+    assert route.called
+    expression = respx.calls.last.request.url.params["expression"]
+    # The interpolated value must not terminate the quoted string early.
+    assert expression == ALBUM_EXPRESSION.format(path='Various/12\\" Singles')
+    assert expression.startswith('path includes "Various/12\\" Singles"')
+
+
+@respx.mock
+def test_play_album_escapes_backslashes_in_path(client):
+    respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
+        return_value=httpx.Response(200, json={"count": 3})
+    )
+    client.play_album("Some\\Path")
+    expression = respx.calls.last.request.url.params["expression"]
+    assert expression.startswith('path includes "Some\\\\Path"')
+
+
+@respx.mock
+def test_play_album_leaves_single_quotes_alone(client):
+    respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
+        return_value=httpx.Response(200, json={"count": 3})
+    )
+    client.play_album("Led Zeppelin/Rock 'n' Roll")
+    expression = respx.calls.last.request.url.params["expression"]
+    assert expression.startswith('path includes "Led Zeppelin/Rock \'n\' Roll"')

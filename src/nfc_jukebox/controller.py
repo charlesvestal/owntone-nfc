@@ -10,7 +10,10 @@ from __future__ import annotations
 import enum
 import logging
 import time
-from typing import Callable
+from contextlib import contextmanager
+from typing import Callable, Iterator
+
+import httpx
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +22,15 @@ class State(enum.Enum):
     IDLE = "idle"
     PLAYING = "playing"
     PAUSED = "paused"
+
+
+class _Outcome:
+    """Whether the guarded OwnTone interaction actually got through."""
+
+    __slots__ = ("ok",)
+
+    def __init__(self) -> None:
+        self.ok = True
 
 
 class Controller:
@@ -46,6 +58,12 @@ class Controller:
         self.last_seen_uid = uid
         self.last_seen_at = self._clock()
 
+        # A still-seated card re-announced by the reader. Restarting the album
+        # from track 1 mid-listen is exactly what the bump window exists to
+        # prevent, so do nothing at all.
+        if self.state is State.PLAYING and uid == self._last_uid:
+            return
+
         card = self._cards.get(uid)
         if card is None:
             self.last_error = f"Unknown card {uid}"
@@ -53,12 +71,24 @@ class Controller:
             return
 
         if self._is_bump(uid):
-            self._owntone.play()
-            self.state = State.PLAYING
+            with self._guarded("resuming playback") as outcome:
+                self._owntone.play()
+            if outcome.ok:
+                self.state = State.PLAYING
+            # Otherwise stay PAUSED: the grace timer still owns the session,
+            # and a re-present can try again.
             return
 
-        self._restore_outputs()
-        self._owntone.play_album(card.path)
+        with self._guarded(f"starting {card.name}") as outcome:
+            self._restore_outputs()
+            self._owntone.play_album(card.path)
+        if not outcome.ok:
+            # Nothing is playing, so do not claim otherwise.
+            self.state = State.IDLE
+            self.now_playing = None
+            self._last_uid = None
+            return
+
         self._last_uid = uid
         self.now_playing = card.name
         self.state = State.PLAYING
@@ -66,7 +96,10 @@ class Controller:
     def on_card_removed(self) -> None:
         if self.state is not State.PLAYING:
             return
-        self._owntone.pause()
+        with self._guarded("pausing"):
+            self._owntone.pause()
+        # PAUSED regardless: the card is off the platter, and if the pause did
+        # not land the grace timer will still stop and release the outputs.
         self._paused_at = self._clock()
         self.state = State.PAUSED
 
@@ -75,9 +108,31 @@ class Controller:
         if self.state is not State.PAUSED:
             return
         if self._clock() - self._paused_at > self._config.grace_period_s:
-            self._release()
+            with self._guarded("releasing outputs"):
+                self._release()
+            # Back to IDLE even on failure: the user is done with this record,
+            # and retrying the release on every tick would only spam the log.
+            self.state = State.IDLE
+            self.now_playing = None
+            self._last_uid = None
 
     # --- internals --------------------------------------------------------
+
+    @contextmanager
+    def _guarded(self, what: str) -> Iterator[_Outcome]:
+        """Contain an OwnTone transport/HTTP failure.
+
+        An exception escaping into the reader callback tears the reader down
+        and reopens it for no reason, and leaves the admin page with nothing
+        to show. Record it instead.
+        """
+        outcome = _Outcome()
+        try:
+            yield outcome
+        except httpx.HTTPError as exc:
+            outcome.ok = False
+            self.last_error = f"OwnTone error while {what}: {exc}"
+            log.warning(self.last_error, exc_info=True)
 
     def _is_bump(self, uid: str) -> bool:
         """A dropped read, not a deliberate lift — resume rather than restart."""
@@ -96,9 +151,6 @@ class Controller:
         # Keep local selected, drop AirPlay so the HomePods go idle and are
         # free for other senders.
         self._owntone.set_outputs(self._owntone.local_output_ids())
-        self.state = State.IDLE
-        self.now_playing = None
-        self._last_uid = None
 
     def _restore_outputs(self) -> None:
         airplay = set(self._owntone.airplay_output_ids())
