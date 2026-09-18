@@ -79,11 +79,20 @@ def test_set_outputs_sends_expected_body(client):
 
 
 def test_album_expression_orders_by_the_real_lexer_tags():
-    # smartpl_lexer.l defines the integer tags `track` and `disc`.
+    # Verified against a live OwnTone 29.3.142 server.
     # `track_number`/`disc_number` are JSON-API field names and do not parse.
-    assert "order by disc asc, track asc" in ALBUM_EXPRESSION
     assert "track_number" not in ALBUM_EXPRESSION
     assert "disc_number" not in ALBUM_EXPRESSION
+
+
+def test_album_expression_orders_by_exactly_one_field():
+    # Multi-field ordering is a syntax error on the server: `order by disc asc,
+    # track asc` returns 500, because the comma is rejected. Without ANY
+    # ordering the server returns tracks effectively shuffled, so exactly one
+    # sort field is required - not zero, not two.
+    assert "order by" in ALBUM_EXPRESSION
+    order_clause = ALBUM_EXPRESSION.split("order by", 1)[1]
+    assert "," not in order_clause
 
 
 @respx.mock
