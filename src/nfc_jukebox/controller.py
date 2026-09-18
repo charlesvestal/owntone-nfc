@@ -163,10 +163,10 @@ class Controller:
         # last-written selection (only on a clean shutdown -- a stale row there
         # has already caused real confusion), and any of it could have been
         # changed by hand in between. None therefore means "no idea", and
-        # _restore_outputs treats that as the user's, which costs one album
-        # played to whatever is already selected and never moves the sound
-        # somewhere nobody asked for. The persisted snapshot still takes effect
-        # from the next card on.
+        # _restore_outputs answers that by applying the snapshot: with no
+        # evidence either way, the choice the user actually saved beats a
+        # selection nobody can vouch for. Hand-picked selections are honoured
+        # again from the next card on, once there is something to compare to.
         self._last_set_outputs: set[str] | None = None
 
         # The outputs we believe should be selected right now, or None when
@@ -759,18 +759,16 @@ class Controller:
         # An empty selection is not evidence of anything (the same judgement
         # _save_selection makes), so it falls through to the snapshot: there is
         # nothing there to clobber, and selecting nothing guarantees silence.
-        if current:
-            if self._last_set_outputs is None:
-                # Nothing written by this process yet -- first card after a
-                # start. We cannot claim this selection as ours, so we treat it
-                # as the user's and leave it be. Note what we do *not* do:
-                # adopt it into the snapshot. OwnTone's own idea of the
-                # selection is not authoritative (it persists it only on a
-                # clean shutdown), and letting a stale row overwrite the
-                # snapshot would destroy the choice the snapshot exists to
-                # carry across exactly this reboot. It is restored from the
-                # next card on, once a release has given us a record.
-                return current
+        # Nothing written by this process yet -- the first card after a start --
+        # falls straight through to the snapshot below. That selection is not
+        # evidence of a human choice: it is either the local-only state a
+        # previous run left behind at release, or a row OwnTone persisted on
+        # its last clean shutdown. Deferring to it put the first record of the
+        # evening through the Pi's headphone jack instead of the HomePods,
+        # which is the exact failure the snapshot exists to prevent. The
+        # snapshot is still not *adopted* from that selection -- it is applied,
+        # and survives unchanged.
+        if current and self._last_set_outputs is not None:
             if set(current) != self._last_set_outputs:
                 # Through _save_selection rather than straight to the snapshot,
                 # so that the shrunken-selection policy still applies: a

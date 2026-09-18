@@ -832,9 +832,9 @@ def test_release_failure_does_not_escape(ctx):
 def _start_with_both_outputs(ctx):
     """Start an album with local + AirPlay selected, as the snapshot asks."""
     controller, owntone, snapshot, clock = ctx
-    # The snapshot is only acted on once we have a record of what we last
-    # selected ourselves; the first card after a start deliberately leaves the
-    # selection alone. See _prime.
+    # Primed so that a *hand-picked* selection would be respected; this test
+    # is about the snapshot being applied in the ordinary steady state.
+    # See _prime.
     _prime(controller, owntone, snapshot, clock)
     snapshot.save(["1", "2"])
     controller.on_card_present("aaaa")
@@ -1107,10 +1107,12 @@ def _prime(controller, owntone, snapshot, clock):
     the platter, and priming with the test's own card would turn its next tap
     into a resume.
 
-    Fresh out of the box it has none, and then deliberately leaves the
-    selection alone (see test_first_card_after_a_restart_leaves_the_selection
-    _alone). Tests about the steady state need to be past that first cycle.
-    The empty snapshot keeps the cycle itself from tripping the shrink policy.
+    Fresh out of the box it has none, so it cannot tell a hand-picked
+    selection from the state a previous run left behind, and applies the
+    snapshot instead (see
+    test_first_card_after_a_restart_restores_the_snapshot). Tests about
+    honouring a user's own choice need to be past that first cycle. The empty
+    snapshot keeps the cycle itself from tripping the shrink policy.
     """
     snapshot.value = []
     controller.on_card_present("cccc")
@@ -1121,22 +1123,45 @@ def _prime(controller, owntone, snapshot, clock):
     controller.last_error = None
 
 
-def test_first_card_after_a_restart_leaves_the_selection_alone(ctx):
-    """No record of what we set means no way to know whether what OwnTone
-    reports is ours or the user's -- and OwnTone's own persisted selection is
-    not authoritative (it is only written on a clean shutdown). The safe
-    default is not to move the audio anywhere the user did not ask for."""
+def test_first_card_after_a_restart_restores_the_snapshot(ctx):
+    """The snapshot exists precisely to carry the speaker choice across a
+    restart, so the first card after one must apply it.
+
+    This deliberately overrides whatever OwnTone reports as selected. After a
+    restart that selection is not evidence of anything: it is either the state
+    a previous run left behind at release (local), or a row OwnTone persisted
+    on its last clean shutdown. Deferring to it meant the first record of the
+    evening played out of the Pi's headphone jack instead of the HomePods,
+    which is the one thing the snapshot was built to prevent.
+
+    The competing case -- a user deliberately picking the local output because
+    they want headphones -- is still honoured from the second card on, once we
+    have a record to compare against. See
+    test_user_switching_to_local_while_idle_is_not_clobbered.
+    """
     controller, owntone, snapshot, _ = ctx
     snapshot.save(["2"])  # a HomePod choice that survived the reboot
+
+    controller.on_card_present("aaaa")
+
+    assert owntone.selected_output_ids() == ["2"]
+    assert controller.state is State.PLAYING
+    # The snapshot is still not *adopted* from a selection we cannot vouch
+    # for -- it is the thing being applied, and comes through unchanged.
+    assert snapshot.load() == ["2"]
+
+
+def test_first_card_after_a_restart_with_no_snapshot_leaves_things_alone(ctx):
+    """Nothing saved means nothing to restore, and selecting nothing would
+    guarantee silence. Whatever OwnTone has stays, and the record plays."""
+    controller, owntone, snapshot, _ = ctx
+    snapshot.value = []
 
     controller.on_card_present("aaaa")
 
     assert not any(c[0] == "set_outputs" for c in owntone.calls)
     assert owntone.selected_output_ids() == ["1"]
     assert controller.state is State.PLAYING
-    # ...and the snapshot is *not* adopted from a selection we cannot vouch
-    # for: the saved choice must survive the reboot it was persisted for.
-    assert snapshot.load() == ["2"]
 
 
 def test_user_switching_to_local_while_idle_is_not_clobbered(ctx):
