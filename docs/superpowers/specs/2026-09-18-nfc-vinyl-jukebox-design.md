@@ -475,3 +475,60 @@ consecutive open failures and recovers unattended in ~4s, verified on hardware.
 Note this is a cure, not a prevention: the root cause is that SIGTERM does not
 close the nfcpy frontend. Handling SIGTERM to close it cleanly would stop the
 wedge happening at all and make the reset a genuine backstop. Worth doing.
+
+## AirPlay: what actually works (settled 2026-09-18)
+
+**Use both HomePods directly, selected as two outputs. That is real stereo.**
+
+Verified with a generated hard-panned test file (`ZZ Test/Stereo Test/` in the
+library - 4s of 440Hz in the left channel, 4s of 880Hz in the right, then both):
+each tone came from its own speaker. OwnTone opens two independent AirPlay
+sessions and the HomeKit pair renders its assigned channel from each.
+
+Keep that test file. It is the only unambiguous way to answer "is this stereo",
+and impressions are not reliable - during this session both "it sounds like
+stereo" and "left plays only the left channel" were asserted and neither
+survived the actual test.
+
+### The Apple TV route is a dead end with OwnTone
+
+Do not re-attempt without new information. What was established:
+
+- The Apple TV is the **group leader** for the HomePods (`igl=1`, shared
+  `gid`), so it looked like the correct single target for a stereo pair.
+- With the User-Agent fix it pairs, accepts the session, shows the track
+  name, and **honours seek commands** - so RTSP control works.
+- But the **playhead never advances on the device, no album art appears, and
+  no audio is produced**, while OwnTone's own clock runs normally and logs no
+  error. The audio stream is accepted and never consumed.
+- PTP timing is not the cause: OwnTone holds ports 319/320 throughout, and the
+  same OwnTone drives the HomePods perfectly.
+
+Best explanation: as a group leader the Apple TV expects AirPlay 2 *group*
+semantics that OwnTone does not implement. That is upstream, not configurable.
+
+### Apple OS 27 breaks AirPlay senders - one config line fixes it
+
+OS 27 (HomePod / tvOS / macOS, AirTunes `srcvers` 980.x) gates `GET /info` on
+the **User-Agent header** and rejects OwnTone's default with 403, *before* any
+authentication. Fix, in `/etc/owntone.conf`:
+
+```
+user_agent = "AirPlay/999.0.0"
+```
+
+Proven on one device, same URL, header the only variable: default -> 403,
+`AirPlay/999.0.0` -> 200. Upstream: owntone/owntone-server issue #2042.
+
+**This is the most consequential finding of the build.** Without it the project
+dies device by device as each one updates. The diagnosis was nearly missed: three
+devices failed with a clean version correlation and the conclusion drawn was
+that Apple had closed AirPlay to third-party senders. It had not.
+
+Worth recording the trap, because it is a good one: earlier, changing Apple
+Home's *Allow Speakers & TV Access* to "Anyone On the Same Network" **did** fix
+the HomePods - they were on OS 26.6, where that genuinely was the cause. The
+same change did nothing for the OS 27 devices, whose failure looked identical.
+A real fix for one class of device masked a completely different cause in
+another. The upstream reporter hit the same false positive four times over two
+weeks.
