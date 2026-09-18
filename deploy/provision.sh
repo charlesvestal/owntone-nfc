@@ -67,6 +67,18 @@ fi
 cp "$REPO/deploy/owntone.conf.example" /etc/owntone.conf
 systemctl enable --now owntone
 
+say "Power control permission"
+# The admin page offers shut down / restart: pulling the plug on a running Pi
+# is how SD cards get corrupted, and this is an appliance people will unplug.
+# Scoped to exactly those two commands so the grant cannot be used for
+# anything else. Raspberry Pi OS ships pi with NOPASSWD: ALL, which makes this
+# redundant today - it is here so the feature survives that being tightened.
+cat > /etc/sudoers.d/nfc-jukebox-power <<EOF
+$USER_NAME ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot
+EOF
+chmod 440 /etc/sudoers.d/nfc-jukebox-power
+visudo -c -f /etc/sudoers.d/nfc-jukebox-power
+
 say "Jukebox service"
 mkdir -p /opt/nfc-jukebox /etc/nfc-jukebox /var/lib/nfc-jukebox
 chown "$USER_NAME:$USER_NAME" /etc/nfc-jukebox /var/lib/nfc-jukebox

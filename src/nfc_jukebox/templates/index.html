@@ -38,6 +38,12 @@
 <label>Name <input id="name" placeholder="(optional)"></label>
 <button id="save">Save</button>
 
+<h2>Power</h2>
+<p class="muted">Pulling the plug on a running Pi is how SD cards get corrupted.</p>
+<button id="poweroff" onclick="power('poweroff')">Shut down</button>
+<button id="reboot" onclick="power('reboot')">Restart</button>
+<p id="powermsg" class="muted">&nbsp;</p>
+
 <h2>Cards</h2>
 <table><thead><tr><th>Name</th><th>Album</th><th>UID</th><th></th></tr></thead>
 <tbody id="cards"></tbody></table>
@@ -153,6 +159,29 @@ async function showArt(path) {
     }
   } catch (e) {
     img.hidden = true; img.removeAttribute('src');
+  }
+}
+
+async function power(action) {
+  const verb = action === 'poweroff' ? 'shut down' : 'restart';
+  if (!confirm('Really ' + verb + ' the jukebox?')) return;
+  const msg = document.getElementById('powermsg');
+  msg.textContent = verb.charAt(0).toUpperCase() + verb.slice(1) + 'ting\u2026';
+  try {
+    const r = await fetch('/api/power', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: action})});
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      msg.textContent = body.error || ('Failed to ' + verb + '.');
+      return;
+    }
+    msg.textContent = action === 'poweroff'
+      ? 'Shutting down. Wait for the green LED to stop flashing before unplugging.'
+      : 'Restarting. This page will go blank for about a minute.';
+  } catch (e) {
+    // The box may have gone away before answering, which is success, not failure.
+    msg.textContent = verb.charAt(0).toUpperCase() + verb.slice(1) + ' requested.';
   }
 }
 
