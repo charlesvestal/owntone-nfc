@@ -1,3 +1,4 @@
+import httpx
 import pytest
 
 from nfc_jukebox.cards import Card
@@ -186,3 +187,74 @@ def test_unknown_card_is_still_recorded_for_learn_mode(ctx):
     controller, _, _, _ = ctx
     controller.on_card_present("ffff")
     assert controller.last_seen_uid == "ffff"
+
+
+def test_same_card_re_presented_while_playing_is_a_noop(ctx):
+    """A double-fired present event for a still-seated card must not restart."""
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    before = list(owntone.calls)
+    clock.advance(30.0)  # well past the bump window; the card never left
+    controller.on_card_present("aaaa")
+    assert owntone.calls == before
+    assert controller.state is State.PLAYING
+    assert controller.last_seen_uid == "aaaa"
+    assert controller.last_seen_at == clock.now
+
+
+def _boom(*_args, **_kwargs):
+    """Stand-in for what owntone.py raises on any 4xx/5xx."""
+    request = httpx.Request("PUT", "http://test:3689/api/player/play")
+    raise httpx.HTTPStatusError(
+        "500", request=request, response=httpx.Response(500, request=request)
+    )
+
+
+def test_play_album_failure_does_not_escape_and_is_recorded(ctx):
+    controller, owntone, _, _ = ctx
+    owntone.play_album = _boom
+    controller.on_card_present("aaaa")
+    assert controller.last_error is not None
+    # Never claim PLAYING when playback demonstrably failed to start.
+    assert controller.state is not State.PLAYING
+    assert controller.now_playing is None
+
+
+def test_bump_resume_failure_does_not_escape(ctx):
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(0.2)
+    owntone.play = _boom
+    controller.on_card_present("aaaa")
+    assert controller.last_error is not None
+    assert controller.state is not State.PLAYING
+
+
+def test_restore_outputs_failure_does_not_escape(ctx):
+    controller, owntone, _, _ = ctx
+    owntone.selected_output_ids = _boom
+    controller.on_card_present("aaaa")
+    assert controller.last_error is not None
+    assert controller.state is not State.PLAYING
+
+
+def test_pause_failure_does_not_escape(ctx):
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+    owntone.pause = _boom
+    controller.on_card_removed()
+    assert controller.last_error is not None
+    # Still parked in PAUSED so the grace timer can release later.
+    assert controller.state is State.PAUSED
+
+
+def test_release_failure_does_not_escape(ctx):
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    owntone.stop = _boom
+    clock.advance(91.0)
+    controller.tick()
+    assert controller.last_error is not None
+    assert controller.state is State.IDLE

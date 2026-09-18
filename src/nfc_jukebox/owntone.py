@@ -13,6 +13,16 @@ import httpx
 ALBUM_EXPRESSION = 'path includes "{path}" order by disc_number asc, track_number asc'
 
 
+def _escape(value: str) -> str:
+    """Escape a value for interpolation into a double-quoted query string.
+
+    An album like `Various/12" Singles` would otherwise close the quoted
+    string early and leave OwnTone parsing garbage. Backslash first, so the
+    escapes we add are not themselves re-escaped.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 class OwnTone:
     def __init__(self, base_url: str, client: httpx.Client | None = None) -> None:
         self._base = base_url.rstrip("/")
@@ -51,7 +61,7 @@ class OwnTone:
             "POST",
             "/api/queue/items/add",
             params={
-                "expression": ALBUM_EXPRESSION.format(path=relative_path),
+                "expression": ALBUM_EXPRESSION.format(path=_escape(relative_path)),
                 "clear": "true",
                 "playback": "start",
             },

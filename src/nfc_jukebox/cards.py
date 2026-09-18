@@ -6,11 +6,14 @@ module knows nothing about playback -- it only maps UIDs to relative paths.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+log = logging.getLogger(__name__)
 
 _SEPARATORS = re.compile(r"[^0-9a-fA-F]")
 
@@ -36,14 +39,19 @@ class CardStore:
             raw = yaml.safe_load(self._path.read_text()) or {}
         except FileNotFoundError:
             return {}
-        return {
-            normalise_uid(uid): Card(
-                uid=normalise_uid(uid),
-                name=entry["name"],
-                path=entry["path"],
-            )
-            for uid, entry in raw.items()
-        }
+        cards: dict[str, Card] = {}
+        for uid, entry in raw.items():
+            # cards.yaml is hand-edited and restored from backup; one bad
+            # entry must cost that card, not the whole record collection.
+            if not isinstance(entry, dict) or "name" not in entry or "path" not in entry:
+                log.warning(
+                    "Skipping malformed card entry for UID %s in %s: "
+                    "expected a mapping with 'name' and 'path'", uid, self._path,
+                )
+                continue
+            key = normalise_uid(str(uid))
+            cards[key] = Card(uid=key, name=entry["name"], path=entry["path"])
+        return cards
 
     def save(self, cards: dict[str, Card]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
