@@ -10,6 +10,12 @@ import httpx
 
 # Verified in Spike 1 (Task 5). If that spike found a different working syntax,
 # this is the single place to change it.
+# OwnTone runs on localhost, so a call taking seconds means it is wedged, not
+# busy. This bounds how long the controller's lock can be held during a
+# release: a slow release blocks the reader thread, so a generous timeout
+# would park card detection for as long as it lasts.
+DEFAULT_TIMEOUT_S = 3.0
+
 ALBUM_EXPRESSION = 'path includes "{path}" order by disc_number asc, track_number asc'
 
 
@@ -26,7 +32,7 @@ def _escape(value: str) -> str:
 class OwnTone:
     def __init__(self, base_url: str, client: httpx.Client | None = None) -> None:
         self._base = base_url.rstrip("/")
-        self._client = client or httpx.Client(timeout=10.0)
+        self._client = client or httpx.Client(timeout=DEFAULT_TIMEOUT_S)
 
     # --- internal ---------------------------------------------------------
 
