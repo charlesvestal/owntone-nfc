@@ -17,7 +17,12 @@
 <p>Tap a card on the reader. Its ID appears here.</p>
 <p id="uid">—</p>
 <p id="known" class="muted">&nbsp;</p>
-<label>Album <select id="album" onchange="syncName()"></select></label>
+<label>Album <input id="album" list="albumlist" size="48" autocomplete="off"
+       placeholder="type to search…" oninput="syncName()"></label>
+<datalist id="albumlist"></datalist>
+<label><input type="checkbox" id="onlyfree" onchange="renderAlbums()"> only albums without a card</label>
+<p id="albumcount" class="muted">&nbsp;</p>
+<p id="albumwarn" class="muted">&nbsp;</p>
 <label>Name <input id="name" placeholder="(optional)"></label>
 <button id="save">Save</button>
 
@@ -111,13 +116,42 @@ function syncName() {
   const album = document.getElementById('album').value || '';
   document.getElementById('name').placeholder =
     album.split('/').pop() || '(optional)';
+  // Say so immediately if the album already has a card - a second card on the
+  // same album is legal but almost always a mistake.
+  const match = allAlbums.find(x => x.path === album);
+  const warn = document.getElementById('albumwarn');
+  if (!album || !match) {
+    warn.textContent = album ? 'not a known album' : '\u00a0';
+  } else if (match.assigned) {
+    warn.textContent = 'already has a card: ' + match.card_name;
+  } else {
+    warn.textContent = '\u00a0';
+  }
 }
+
+let allAlbums = [];
 async function loadAlbums() {
   const a = await (await fetch('/api/albums')).json();
-  document.getElementById('album').replaceChildren(
-    ...a.albums.map(x => el('option', x)));
+  if (!Array.isArray(a.albums)) return;
+  allAlbums = a.albums;
+  document.getElementById('albumcount').textContent =
+    `${a.unassigned} of ${a.total} albums have no card yet`;
+  renderAlbums();
+}
+function renderAlbums() {
+  const onlyFree = document.getElementById('onlyfree').checked;
+  const shown = onlyFree ? allAlbums.filter(x => !x.assigned) : allAlbums;
+  // A datalist rather than a <select>: with a few hundred albums a dropdown is
+  // unusable, and this gives type-ahead for free with no library.
+  document.getElementById('albumlist').replaceChildren(...shown.map(x => {
+    const o = el('option');
+    o.value = x.path;
+    if (x.assigned) o.label = 'has a card: ' + x.card_name;
+    return o;
+  }));
   syncName();
 }
+
 async function save() {
   const uid = document.getElementById('uid').textContent;
   if (uid === '\u2014') return alert('Tap a card first.');
@@ -132,6 +166,7 @@ async function save() {
     return alert(body.error || `Could not save the card (${response.status}).`);
   }
   document.getElementById('name').value = '';
+  await loadAlbums();
   refresh();
 }
 async function del(uid) {
