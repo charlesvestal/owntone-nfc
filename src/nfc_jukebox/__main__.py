@@ -28,8 +28,9 @@ def main() -> None:
 
     config = Config.load()
     store = CardStore(config.cards_file)
+    owntone = OwnTone(config.owntone_url)
     controller = Controller(
-        owntone=OwnTone(config.owntone_url),
+        owntone=owntone,
         cards=store,
         snapshot=OutputSnapshot(config.outputs_file),
         config=config,
@@ -40,7 +41,7 @@ def main() -> None:
     reader.on_present = controller.on_card_present
     reader.on_removed = controller.on_card_removed
 
-    app = create_app(config, controller, store)
+    app = create_app(config, controller, store, owntone=owntone)
     threading.Thread(
         target=lambda: app.run(host="0.0.0.0", port=config.web_port,
                                threaded=True, use_reloader=False),

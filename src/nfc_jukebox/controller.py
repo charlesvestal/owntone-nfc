@@ -71,6 +71,13 @@ class Controller:
         self._lock = threading.RLock()
 
         self.state = State.IDLE
+        # Management mode: cards identify themselves but do not play. Sitting
+        # down to register a stack of cards while each tap starts an album is
+        # the wrong experience, especially with the speakers in a living room.
+        # Deliberately NOT persisted - a restart returns to a working jukebox,
+        # because a box that silently refuses to play is worse than one that
+        # forgot a setting.
+        self.management_mode = False
         self.last_error: str | None = None
         self.now_playing: str | None = None
         # Every scanned UID, known or not — this is what learn mode reads.
@@ -101,6 +108,13 @@ class Controller:
         # Recorded before the lookup so unregistered cards are still learnable.
         self.last_seen_uid = uid
         self.last_seen_at = self._clock()
+
+        # Management mode short-circuits here: after recording the UID, so the
+        # card is still learnable, but before anything reaches OwnTone.
+        if self.management_mode:
+            card = self._cards.get(uid)
+            self.last_error = None if card else f"Unknown card {uid}"
+            return
 
         # A still-seated card re-announced by the reader. Restarting the album
         # from track 1 mid-listen is exactly what the bump window exists to
@@ -165,11 +179,30 @@ class Controller:
         self.now_playing = card.name
         self.state = State.PLAYING
 
+    def set_management_mode(self, enabled: bool) -> None:
+        """Turn card-identification-only mode on or off.
+
+        Enabling stops playback: the point is a quiet box to register against,
+        and leaving the current album running would defeat it.
+        """
+        with self._lock:
+            was = self.management_mode
+            self.management_mode = bool(enabled)
+            if self.management_mode and not was:
+                with self._guarded("stopping for management mode"):
+                    self._owntone.stop()
+                    self._owntone.clear_queue()
+                self.state = State.IDLE
+                self.now_playing = None
+                self._last_uid = None
+
     def on_card_removed(self) -> None:
         with self._lock:
             self._on_card_removed()
 
     def _on_card_removed(self) -> None:
+        if self.management_mode:
+            return
         if self.state is not State.PLAYING:
             return
         with self._guarded("pausing"):

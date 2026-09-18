@@ -243,3 +243,32 @@ def test_every_element_the_page_scripts_reference_actually_exists():
     defined = set(re.findall(r"""\bid=["']([^"']+)["']""", html))
     missing = sorted(referenced - defined)
     assert not missing, f"script references ids with no matching element: {missing}"
+
+
+def test_management_mode_toggles_through_the_api(app_ctx):
+    client, controller, _ = app_ctx
+    assert client.get("/api/status").get_json()["management_mode"] is False
+
+    assert client.put("/api/management", json={"enabled": True}).status_code == 200
+    assert controller.management_mode is True
+    assert client.get("/api/status").get_json()["management_mode"] is True
+
+    client.put("/api/management", json={"enabled": False})
+    assert controller.management_mode is False
+
+
+def test_management_mode_rejects_a_non_boolean(app_ctx):
+    client, controller, _ = app_ctx
+    assert client.put("/api/management", json={"enabled": "yes"}).status_code == 400
+    assert controller.management_mode is False
+
+
+def test_artwork_requires_a_path(app_ctx):
+    client, _, _ = app_ctx
+    assert client.get("/api/artwork").status_code == 400
+
+
+def test_artwork_returns_null_when_no_owntone_client(app_ctx):
+    # create_app tolerates being built without one; the page must not break.
+    client, _, _ = app_ctx
+    assert client.get("/api/artwork?path=A/B").get_json()["url"] is None

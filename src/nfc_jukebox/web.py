@@ -18,7 +18,7 @@ from .cards import Card, name_for_path, normalise_uid
 log = logging.getLogger(__name__)
 
 
-def create_app(config, controller, store) -> Flask:
+def create_app(config, controller, store, owntone=None) -> Flask:
     app = Flask(__name__)
     # add_card and delete_card are read-modify-write over one YAML file, and
     # Flask serves requests from several threads. Without this, two people
@@ -74,7 +74,36 @@ def create_app(config, controller, store) -> Flask:
             last_seen_known=card is not None,
             last_seen_name=card.name if card else None,
             last_seen_path=card.path if card else None,
+            management_mode=controller.management_mode,
         )
+
+    @app.put("/api/management")
+    def management():
+        payload = request.get_json(silent=True) or {}
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            return jsonify(error="Expected {\"enabled\": true|false}."), 400
+        controller.set_management_mode(enabled)
+        return jsonify(management_mode=controller.management_mode)
+
+    @app.get("/api/artwork")
+    def artwork():
+        """Album art for a library-relative path, as an OwnTone-relative URL.
+
+        Its own endpoint rather than a field on /api/status: status is polled
+        once a second, and this costs a search on OwnTone. The page fetches it
+        only when the scanned card changes.
+        """
+        path = (request.args.get("path") or "").strip()
+        if not path:
+            return jsonify(error="path is required"), 400
+        if owntone is None:
+            return jsonify(url=None)
+        try:
+            return jsonify(url=owntone.album_artwork_url(path))
+        except Exception:
+            log.warning("Artwork lookup failed for %s", path, exc_info=True)
+            return jsonify(url=None)
 
     @app.get("/api/albums")
     def albums():
