@@ -25,7 +25,7 @@ DEFAULT_TIMEOUT_S = 3.0
 # than the previous one but still a guess about runtime behaviour. Spike 1 is
 # what turns this comment into a fact, and this is the single place to change
 # if it finds otherwise.
-ALBUM_EXPRESSION = 'path includes "{path}" order by disc asc, track asc'
+ALBUM_EXPRESSION = 'path includes "{path}" order by path asc'
 
 # `type` is the `.name` field of OwnTone's `struct output_definition`
 # (src/outputs/*.c): "AirPlay 2" (airplay.c), "AirPlay 1" (raop.c),
