@@ -2002,10 +2002,14 @@ web_port: 8080
 # deploy/nfc-jukebox.service -> /etc/systemd/system/nfc-jukebox.service
 [Unit]
 Description=NFC Vinyl Jukebox
-# OwnTone must be up before we start issuing API calls.
+# Start after OwnTone, but do NOT share its fate: Requires= would deactivate
+# this service if owntone.service ever failed or stopped, and because that is a
+# clean stop, Restart=always would not bring it back. One 2am OwnTone segfault
+# would kill the reader loop and the admin page until someone SSHed in. The
+# controller already contains and surfaces an unreachable OwnTone, so Wants=
+# keeps the ordering and keeps that resilience.
 After=network-online.target owntone.service
-Wants=network-online.target
-Requires=owntone.service
+Wants=network-online.target owntone.service
 # Do not start before the music is actually mounted. Harmless for local
 # storage; essential if library_root becomes a NAS mount (Task 16).
 RequiresMountsFor=/srv/music
@@ -2013,7 +2017,16 @@ RequiresMountsFor=/srv/music
 [Service]
 Type=simple
 User=pi
-Group=dialout
+# dialout is for the UART the PN532 sits on. As Group= it would also become the
+# primary group of every file the service writes; as a supplementary group it
+# grants the serial access without touching file ownership.
+SupplementaryGroups=dialout
+# systemd creates these before ExecStart and hands them to User=, so the
+# service can actually write cards.yaml. Without it /etc/nfc-jukebox stays
+# root-owned 0755 and every card registration dies with PermissionError.
+ConfigurationDirectory=nfc-jukebox
+ConfigurationDirectoryMode=0755
+StateDirectory=nfc-jukebox
 ExecStart=/opt/nfc-jukebox/venv/bin/python -m nfc_jukebox
 Restart=always
 RestartSec=5
@@ -2026,7 +2039,12 @@ WantedBy=multi-user.target
 
 ```bash
 sudo mkdir -p /opt/nfc-jukebox /etc/nfc-jukebox /var/lib/nfc-jukebox
-sudo chown pi:pi /var/lib/nfc-jukebox
+# The service runs as pi and writes cards.yaml into /etc/nfc-jukebox, so that
+# directory must be pi-writable too -- otherwise every card registration fails
+# with PermissionError. The unit's ConfigurationDirectory=/StateDirectory= also
+# assert this on each start; these chowns make a first run before the unit is
+# installed (and a hand-copied config) behave the same way.
+sudo chown pi:pi /etc/nfc-jukebox /var/lib/nfc-jukebox
 python3 -m venv /opt/nfc-jukebox/venv
 /opt/nfc-jukebox/venv/bin/pip install -e ~/owntone-nfc
 sudo cp ~/owntone-nfc/deploy/config.yaml.example /etc/nfc-jukebox/config.yaml
@@ -2362,7 +2380,10 @@ systemctl enable --now owntone
 
 echo "==> Jukebox service"
 mkdir -p /opt/nfc-jukebox /etc/nfc-jukebox /var/lib/nfc-jukebox
-chown pi:pi /var/lib/nfc-jukebox
+# /etc/nfc-jukebox holds cards.yaml, which the service writes as pi. Leaving it
+# root-owned makes every card registration fail with PermissionError, i.e. the
+# box can never be taught a single album.
+chown pi:pi /etc/nfc-jukebox /var/lib/nfc-jukebox
 [ -d /opt/nfc-jukebox/venv ] || python3 -m venv /opt/nfc-jukebox/venv
 /opt/nfc-jukebox/venv/bin/pip install -q -e "$REPO"
 [ -f /etc/nfc-jukebox/config.yaml ] \
