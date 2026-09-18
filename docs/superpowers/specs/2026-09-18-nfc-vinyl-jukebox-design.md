@@ -385,3 +385,93 @@ Still unverified and still requiring Spikes 0-2:
   returns 204 and fails asynchronously — in which case the box goes silent and no
   current code path notices
 - the real PN532 reacquisition time, which sets the bump window
+
+## Spike results on hardware (2026-09-18)
+
+All three spikes ran on the real Pi. Several findings contradict what this
+document assumed; the assumptions are corrected below rather than edited out,
+because what was wrong is the useful part.
+
+### Spike 0 — AirPlay: PASSED
+
+**The HomePods work, associated with the Apple TV, with no PIN pairing and no
+un-binding.** The single required change was on Apple's side:
+
+> Home app -> Home Settings -> **Allow Speakers & TV Access -> "Anyone On the
+> Same Network"**
+
+Before that change, selecting them succeeded and then they deselected
+themselves seconds later, with `Pairing step 1 ... Missing or invalid public
+key` / `requires a valid PIN or password` in OwnTone's log. Apple's default of
+*"Only People Sharing This Home"* cannot be satisfied by a Linux sender.
+
+Corrections to this document's assumptions:
+
+- **A stereo pair does NOT appear as a single AirPlay target.** OwnTone lists
+  `HomePod Left (2)` and `HomePod Right` as two independent outputs. Selecting
+  both gives real stereo (confirmed by ear). The output snapshot stores a list,
+  so this needed no design change - but "tick two boxes, not one" is the actual
+  user experience.
+- **`requires_auth` / `needs_auth_key` in `/api/outputs` were `false`** on both
+  devices while OwnTone's log demanded a PIN. Those flags cannot be used to
+  detect a pairing requirement.
+- **AirPlay volume is bidirectional.** A volume set through OwnTone was
+  overridden by the HomePods' own reported level (set 12, read back 27). The
+  device has final say.
+
+**macOS is NOT usable as a test receiver.** macOS 27 returns `403 Forbidden` to
+an unauthenticated `/info` probe - *including from the Mac to itself over
+loopback*, which rules out network, firewall and sender identity. It wants the
+HomeKit handshake before it will answer at all. No setting fixes this, and the
+staged "Mac first as a positive control" plan was therefore dead on arrival.
+
+### Spike 1 — album expression: three real bugs
+
+See the "Verified against OwnTone's source" section above for the type strings
+and lexer tags. On a live server, additionally:
+
+- **Ordering is not optional.** With no `order by`, a 16-track album came back
+  as `6 5 12 7 3 8 1 14 ...`. "Card on plays from track 1" would have been
+  broken on every album.
+- **Multi-field ordering is a syntax error.** `order by disc asc, track asc`
+  returns 500 - the comma is rejected. Exactly one sort field is allowed, which
+  is why ordering is by `path` (keeps multi-disc albums in order from one card).
+
+### Spike 2 — presence: 35ms
+
+A stationary NTAG213 on the PN532 over UART showed a **35ms worst-case gap**
+between presence reads over ~11s. The originally guessed 3s bump window was
+~85x too long; a deliberate lift-and-replace would have resumed instead of
+restarting. Set to 0.25s. Measured on a bare board - an enclosure will widen
+the gap, and it is a config value precisely so retuning needs no code change.
+
+### Latency
+
+Card-tap-to-audio was ~2.3s and it was **not our code**: every OwnTone API call
+costs 2-3ms, so all six round trips per tap total ~15ms. The delay was
+OwnTone's `start_buffer_ms`, which defaults to 2250ms for compatibility with
+AirPlay hardware from the 2000s.
+
+| Output | before | after `start_buffer_ms = 500` |
+|---|---|---|
+| Local ALSA | 2300 ms | **550 ms** |
+| HomePods | - | **2080 ms** |
+
+HomePods stay at ~2s because that is the AirPlay 2 PTP handshake, not
+buffering. **This is the measurement that justifies the 90s grace period**:
+releasing the session on every lifted card would cost a 2s handshake to get it
+back. That decision was originally made on intuition; it is now measured.
+
+### Reliability finding: the PN532 wedges on restart
+
+Killing the service mid-transaction - which a plain `systemctl restart` does -
+leaves the PN532 out of frame sync. Every subsequent open then fails with
+`ETIMEDOUT` **forever**; reopening the port never recovers it, and nothing
+holds the port. Only pulsing the chip's active-low `RSTPDN` line clears it.
+
+On this HAT that line is jumpered to GPIO20. The reader now pulses it after two
+consecutive open failures and recovers unattended in ~4s, verified on hardware.
+
+Note this is a cure, not a prevention: the root cause is that SIGTERM does not
+close the nfcpy frontend. Handling SIGTERM to close it cleanly would stop the
+wedge happening at all and make the reset a genuine backstop. Worth doing.
