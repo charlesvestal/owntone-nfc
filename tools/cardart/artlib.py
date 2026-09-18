@@ -150,3 +150,87 @@ def slug(path: str) -> str:
     text = path.replace("/", " - ")
     text = re.sub(r"[^\w\s\-.']", "", text, flags=re.UNICODE)
     return re.sub(r"\s+", " ", text).strip()[:150]
+
+
+def title_match(searched: tuple[str, str], matched: tuple[str, str]) -> float:
+    """How well a search result fits what was asked for, 0.0 to 1.0.
+
+    Artist and album are scored separately and the album weighted higher. A
+    combined comparison looks reasonable until a self-titled record, where the
+    artist name satisfies the entire query and any album by that artist scores
+    highly -- which is exactly how a search for Liquid Mike's self-titled album
+    returned "Paul Bunyan's Slingshot" wearing a 0.85.
+
+    Deliberately forgiving about extra words, because catalogues append things
+    the library does not carry ("(Deluxe)", "(Original 1965 TV Soundtrack)")
+    and those are still the right record. Missing and different words are what
+    indicate a wrong match.
+    """
+    return 0.35 * _similar(searched[0], matched[0]) + \
+           0.65 * _similar(searched[1], matched[1])
+
+
+def _similar(wanted_text: str, got_text: str) -> float:
+    import difflib
+    import re as _re
+
+    def words(text: str) -> set[str]:
+        return {w for w in _re.findall(r"[a-z0-9']+", text.lower())
+                if w not in _NOISE}
+
+    wanted, got = words(wanted_text), words(got_text)
+    if not wanted:
+        return 1.0 if not got else 0.0
+    covered = len(wanted & got) / len(wanted)
+    # Sequence similarity catches transpositions and near-spellings that a set
+    # comparison misses; the two disagree often enough to be worth averaging.
+    ratio = difflib.SequenceMatcher(None, wanted_text.lower(),
+                                    got_text.lower()).ratio()
+    return 0.7 * covered + 0.3 * ratio
+
+
+_NOISE = {"the", "a", "an", "and", "of", "deluxe", "edition", "remaster",
+          "remastered", "version", "expanded", "anniversary", "original",
+          "soundtrack", "ep", "lp", "feat", "featuring", "bonus", "track",
+          "tracks", "disc", "vol", "volume"}
+
+
+# Below this a match is treated as a different album rather than a variant
+# spelling. Tuned against this library: "Liquid Mike - Paul Bunyan's
+# Slingshot" for a self-titled search scores 0.37, while "Vince Guaraldi Trio
+# - A Charlie Brown Christmas (Original 1965 TV Soundtrack)" scores 0.67.
+MATCH_FLOOR = 0.55
+
+# Above this a match is good enough to stop searching. Clearing MATCH_FLOOR is
+# not: a fit of 0.60 is "probably not a different album", which is a much
+# weaker claim than "this is the album". Deezer offered "Heavenly Sweetheart -
+# $300 (feat. Liquid Mike)" at 0.60 for a Liquid Mike search, and treating
+# that as settled meant never asking the archive that had the real sleeve.
+CONFIDENT = 0.85
+
+
+def rank_candidates(candidates, min_px: int):
+    """Order artwork candidates best-first.
+
+    Correctness outranks resolution: a sharp scan of the wrong album is worse
+    than a merely adequate picture of the right one, because only one of those
+    is recoverable by looking at it. So candidates are grouped into "plausibly
+    this album" and "probably not", and resolution only decides within a group.
+
+    `candidates` are dicts with `width`, `score` and `source`.
+    """
+    def key(candidate):
+        plausible = candidate["score"] >= MATCH_FLOOR
+        big_enough = candidate["width"] >= min_px
+        local = candidate["source"].startswith(("file:", "embedded:"))
+        return (
+            plausible,          # right album first
+            big_enough,         # then usable for print
+            local,              # then the library, which cannot be a mismatch
+            # Fit to one decimal, so that a clearly better match beats a
+            # merely sharper one, while near-ties fall through to resolution.
+            # Without this a 0.6 fit at 4000px outranked a 1.0 at 3000.
+            round(candidate["score"], 1),
+            candidate["width"],  # then sharpness
+        )
+    return sorted(candidates, key=key, reverse=True)
