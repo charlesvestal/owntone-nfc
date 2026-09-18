@@ -5,6 +5,7 @@ Deliberately tiny: OwnTone's UI on :3689 owns everything player-related.
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 import threading
 from pathlib import Path
@@ -19,7 +20,17 @@ from .cards import Card, name_for_path, normalise_uid
 log = logging.getLogger(__name__)
 
 
-def create_app(config, controller, store, owntone=None) -> Flask:
+def _run_power(action: str) -> None:
+    """Ask systemd to power off or reboot, in the background.
+
+    Detached so the HTTP response is sent before the machine goes away -
+    otherwise the browser reports a network error on a request that worked.
+    """
+    command = ["sudo", "-n", "/usr/bin/systemctl", action]
+    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def create_app(config, controller, store, owntone=None, power=None) -> Flask:
     # Where sound will come out. Polled once a second by the page, so cached
     # briefly rather than asking OwnTone every time - the answer changes only
     # when someone picks different speakers.
@@ -108,6 +119,30 @@ def create_app(config, controller, store, owntone=None) -> Flask:
             return jsonify(error="Expected {\"enabled\": true|false}."), 400
         controller.set_management_mode(enabled)
         return jsonify(management_mode=controller.management_mode)
+
+    # Injected so tests never shell out, and so the command is in one place.
+    run_power = power if power is not None else _run_power
+
+    @app.post("/api/power")
+    def power_control():
+        """Shut the box down or reboot it.
+
+        A Pi pulled from the wall mid-write is how SD cards die, and this is an
+        appliance people will unplug. Note there is no authentication on this
+        page - anyone on the LAN can call this. That is a real widening, judged
+        acceptable only because anyone who can reach it could also pull the
+        plug, which is the worse outcome this exists to prevent.
+        """
+        payload = request.get_json(silent=True) or {}
+        action = payload.get("action")
+        if action not in ("poweroff", "reboot"):
+            return jsonify(error='Expected {"action": "poweroff"|"reboot"}.'), 400
+        try:
+            run_power(action)
+        except Exception as exc:
+            log.exception("Power command failed")
+            return jsonify(error=f"Could not {action}: {exc}"), 500
+        return jsonify(action=action)
 
     @app.get("/api/artwork")
     def artwork():

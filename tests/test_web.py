@@ -320,3 +320,37 @@ def test_status_survives_owntone_being_unreachable(app_ctx):
     body = app.test_client().get("/api/status").get_json()
     assert body["outputs"] is None
     assert body["state"] is not None
+
+
+def _power_app(app_ctx, recorder):
+    from nfc_jukebox import web as web_module
+    _, controller, store = app_ctx
+    app = web_module.create_app(Config(), controller, store, power=recorder)
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def test_power_off_and_reboot_are_dispatched(app_ctx):
+    seen = []
+    client = _power_app(app_ctx, seen.append)
+    assert client.post("/api/power", json={"action": "poweroff"}).status_code == 200
+    assert client.post("/api/power", json={"action": "reboot"}).status_code == 200
+    assert seen == ["poweroff", "reboot"]
+
+
+def test_power_rejects_anything_else(app_ctx):
+    seen = []
+    client = _power_app(app_ctx, seen.append)
+    for bad in ({"action": "rm -rf /"}, {"action": "halt"}, {}, {"action": None}):
+        assert client.post("/api/power", json=bad).status_code == 400
+    # Nothing unrecognised is ever passed through to the shell.
+    assert seen == []
+
+
+def test_power_reports_a_failure_instead_of_pretending(app_ctx):
+    def boom(action):
+        raise OSError("sudo: a password is required")
+    client = _power_app(app_ctx, boom)
+    response = client.post("/api/power", json={"action": "poweroff"})
+    assert response.status_code == 500
+    assert "password" in response.get_json()["error"]
