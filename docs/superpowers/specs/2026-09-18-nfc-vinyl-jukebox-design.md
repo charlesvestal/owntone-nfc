@@ -331,3 +331,57 @@ Differences, and what we take from them:
 - It also streams Spotify; we are local-files-only. No architectural impact.
 - Its physical build (N20 motor spinning a printed disk, NeoPixels, Li-Po + PowerBoost,
   XIAO satellite board, 3D-printed body) is out of scope here.
+
+## Verified against OwnTone's source (2026-09-18)
+
+Two assumptions in the original design were wrong, and both would have produced a
+device that silently did not work. Neither was catchable by the test suite, because
+the mocks were written from the same assumptions as the code. Both were settled by
+reading OwnTone's C source rather than waiting for hardware.
+
+### Output `type` strings
+
+From the `.name` field of each `struct output_definition` in `src/outputs/*.c`:
+
+| Backend | `type` value |
+|---|---|
+| airplay.c | `AirPlay 2` |
+| raop.c | `AirPlay 1` |
+| alsa.c | `ALSA` |
+| pulse.c | `Pulseaudio` |
+| cast.c | `Chromecast` |
+| streaming.c | `streaming` |
+
+The code compared `type == "airplay"`, which matches **nothing**. Consequences:
+`airplay_output_ids()` always returned empty, `local_output_ids()` returned every
+output *including the HomePods*, and `_release()` re-selected them — so the HomePods
+would never have been released. That is the headline requirement, failing silently.
+
+Two corrections follow:
+- AirPlay detection is a casefolded prefix match, covering AirPlay 1 and 2.
+- "Local" is an **allow-list** (`ALSA`, `Pulseaudio`), never "anything not AirPlay".
+  A deny-list would have selected a neighbour's Chromecast and OwnTone's HTTP
+  `streaming` output on every release.
+
+### Smart-playlist expression grammar
+
+From `src/parsers/smartpl_lexer.l`: valid tokens include `path` (string tag),
+`includes`, `starts with`, `order by`, `asc`/`desc`, and the integer tags **`disc`**
+and **`track`**.
+
+`disc_number` / `track_number` are **JSON-API track-object field names**, not
+expression grammar. The original expression would have failed to parse, returning
+400 on every card tap — nothing would ever have played. Confusing these two
+vocabularies is the whole bug.
+
+### The lesson for the remaining spikes
+
+Source-reading closed two binary risks cheaply, but it is not a running server.
+Still unverified and still requiring Spikes 0-2:
+
+- whether OwnTone *parses* the corrected expression, and whether `path` is the full
+  filesystem path that the anchoring fix assumes
+- whether `PUT /api/outputs/set` actually raises for a powered-off speaker, or
+  returns 204 and fails asynchronously — in which case the box goes silent and no
+  current code path notices
+- the real PN532 reacquisition time, which sets the bump window
