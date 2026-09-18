@@ -11,7 +11,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request
 from werkzeug.exceptions import BadRequest
 
-from .cards import Card, normalise_uid
+from .cards import Card, name_for_path, normalise_uid
 
 log = logging.getLogger(__name__)
 
@@ -84,10 +84,10 @@ def create_app(config, controller, store) -> Flask:
         except BadRequest:
             payload = None
         if not isinstance(payload, dict):
-            return jsonify(error="Expected a JSON object with 'uid', 'name' "
-                                 "and 'path'."), 400
+            return jsonify(error="Expected a JSON object with 'uid' and "
+                                 "'path' (optional 'name')."), 400
 
-        missing = [k for k in ("uid", "name", "path") if k not in payload]
+        missing = [k for k in ("uid", "path") if k not in payload]
         if missing:
             return jsonify(error=f"Missing required field(s): "
                                  f"{', '.join(missing)}."), 400
@@ -97,15 +97,18 @@ def create_app(config, controller, store) -> Flask:
         if not uid:
             return jsonify(error=f"{raw_uid!r} is not a usable card UID."), 400
 
-        name = payload["name"]
-        if not isinstance(name, str) or not name.strip():
-            return jsonify(error="'name' must be a non-empty label for the card."), 400
-
         _, error = _album_dir(payload["path"])
         if error:
             return jsonify(error=error), 400
 
-        card = Card(uid=uid, name=name.strip(), path=payload["path"])
+        # The path already names the album, so a name is optional. Supplying
+        # one is for friendly labels ("Bedtime Songs"), not routine entry.
+        name = payload.get("name")
+        name = name.strip() if isinstance(name, str) and name.strip() else None
+
+        card = Card(uid=uid,
+                    name=name or name_for_path(payload["path"]),
+                    path=payload["path"])
         try:
             with store_lock:
                 cards = store.load()

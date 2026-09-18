@@ -110,11 +110,26 @@ def test_post_card_rejects_a_file_that_is_not_a_directory(app_ctx, tmp_path):
     assert response.status_code == 400
 
 
-def test_post_card_requires_a_name(app_ctx):
-    client, _, _ = app_ctx
-    response = client.post("/api/cards", json={
-        "uid": "04a2b3c4", "name": "   ", "path": "Miles Davis/Kind of Blue"})
-    assert response.status_code == 400
+def test_post_card_does_not_require_a_name(app_ctx):
+    # The album path already identifies the record; making the operator retype
+    # it as a "name" is redundant. A blank or absent name is derived instead.
+    client, _, store = app_ctx
+    assert client.post("/api/cards", json={
+        "uid": "04a2b3c4", "name": "   ",
+        "path": "Miles Davis/Kind of Blue"}).status_code == 201
+    assert store.get("04a2b3c4").name == "Kind of Blue"
+
+    assert client.post("/api/cards", json={
+        "uid": "04a2b3c5", "path": "Fleetwood Mac/Rumours"}).status_code == 201
+    assert store.get("04a2b3c5").name == "Rumours"
+
+
+def test_post_card_still_honours_an_explicit_name(app_ctx):
+    client, _, store = app_ctx
+    client.post("/api/cards", json={
+        "uid": "04a2b3c6", "name": "Bedtime Songs",
+        "path": "Miles Davis/Kind of Blue"})
+    assert store.get("04a2b3c6").name == "Bedtime Songs"
 
 
 def test_concurrent_registrations_do_not_lose_a_card(app_ctx):
