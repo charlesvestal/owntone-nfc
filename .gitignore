@@ -9,3 +9,6 @@ venv/
 
 # Backups contain the card registry and config; keep them out of git.
 backups/
+
+# Tooling scratch
+.serena/
