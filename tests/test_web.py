@@ -50,6 +50,36 @@ def test_delete_card_removes_mapping(app_ctx):
     assert store.get("04a2b3c4") is None
 
 
+def test_status_marks_an_unregistered_card_as_unknown(app_ctx):
+    # A bare UID next to a stale dropdown selection reads as if that album is
+    # what the card maps to. The page has to be able to say otherwise.
+    client, controller, _ = app_ctx
+    controller.on_card_present("deadbeef")
+    body = client.get("/api/status").get_json()
+    assert body["last_seen_uid"] == "deadbeef"
+    assert body["last_seen_known"] is False
+    assert body["last_seen_name"] is None
+    assert body["last_seen_path"] is None
+
+
+def test_status_resolves_a_registered_card(app_ctx):
+    client, controller, store = app_ctx
+    store.save({"04a2b3c4": Card(uid="04a2b3c4", name="Blue",
+                                 path="Miles Davis/Kind of Blue")})
+    controller.on_card_present("04:A2:B3:C4")
+    body = client.get("/api/status").get_json()
+    assert body["last_seen_known"] is True
+    assert body["last_seen_name"] == "Blue"
+    assert body["last_seen_path"] == "Miles Davis/Kind of Blue"
+
+
+def test_status_with_no_card_seen_reports_unknown_without_crashing(app_ctx):
+    client, _, _ = app_ctx
+    body = client.get("/api/status").get_json()
+    assert body["last_seen_uid"] is None
+    assert body["last_seen_known"] is False
+
+
 def test_learn_mode_sees_unregistered_card(app_ctx):
     client, controller, _ = app_ctx
     controller.on_card_present("deadbeef")

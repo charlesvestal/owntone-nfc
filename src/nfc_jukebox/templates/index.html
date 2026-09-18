@@ -25,6 +25,9 @@
 <tbody id="cards"></tbody></table>
 
 <script>
+// Tracks which card the dropdown was last auto-pointed at, so a selection the
+// user is actively making is not yanked away on the next one-second poll.
+let lastShownUid = null;
 // Everything below builds nodes and sets textContent rather than innerHTML:
 // album folder names and card labels are arbitrary user text, and one folder
 // named with an <img onerror=...> would otherwise run script on this page.
@@ -49,6 +52,27 @@ async function refresh() {
     `${s.state}${s.now_playing ? ' \u2014 ' + s.now_playing : ''}` +
     (s.last_error ? ` \u00b7 ${s.last_error}` : '');
   if (s.last_seen_uid) document.getElementById('uid').textContent = s.last_seen_uid;
+
+  // Say plainly whether this card is already assigned. Without this the page
+  // shows a bare UID beside whatever album was last selected, which looks
+  // like the card's current mapping.
+  const known = document.getElementById('known');
+  if (!s.last_seen_uid) {
+    known.textContent = '\u00a0';
+  } else if (s.last_seen_known) {
+    known.textContent = 'Registered to: ' + s.last_seen_name +
+                        '  (' + s.last_seen_path + ')  \u2014 saving will reassign it';
+    // Point the dropdown at what this card actually plays.
+    const sel = document.getElementById('album');
+    if (lastShownUid !== s.last_seen_uid &&
+        [...sel.options].some(o => o.value === s.last_seen_path)) {
+      sel.value = s.last_seen_path;
+      syncName();
+    }
+  } else {
+    known.textContent = 'Not registered yet \u2014 choose an album and Save to assign it.';
+  }
+  lastShownUid = s.last_seen_uid;
 
   const c = await (await fetch('/api/cards')).json();
   const tbody = document.getElementById('cards');

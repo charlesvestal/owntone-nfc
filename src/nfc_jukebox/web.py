@@ -53,11 +53,20 @@ def create_app(config, controller, store) -> Flask:
 
     @app.get("/api/status")
     def status():
+        # Resolve the last scanned card here rather than in the controller:
+        # the page needs to say whether the card in the user's hand is already
+        # assigned, and showing a bare UID next to a stale dropdown selection
+        # reads as if that album is what the card maps to.
+        uid = controller.last_seen_uid
+        card = store.get(uid) if uid else None
         return jsonify(
             state=controller.state.value,
             now_playing=controller.now_playing,
             last_error=controller.last_error,
-            last_seen_uid=controller.last_seen_uid,
+            last_seen_uid=uid,
+            last_seen_known=card is not None,
+            last_seen_name=card.name if card else None,
+            last_seen_path=card.path if card else None,
         )
 
     @app.get("/api/albums")
