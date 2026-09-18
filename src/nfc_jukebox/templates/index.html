@@ -12,6 +12,8 @@
   #album { width: 100%; font-family: ui-monospace, monospace; font-size: .85rem; }
   label { display: block; margin: .3rem 0; }
   .muted { color: #666; }
+  .warn { background:#fdf0ef; border-left:4px solid #c9584f;
+          padding:8px 12px; margin:10px 0; color:#7d2f28; }
 </style>
 
 <h1>Jukebox</h1>
@@ -23,6 +25,7 @@
 <p class="muted">Lifting a card pauses the record and putting it back picks up
   where it left off, so this is the only way back to track 1 mid-side.</p>
 <button id="startover" onclick="startOver()">Start over</button>
+<p id="library" class="warn" hidden></p>
 <p id="startovermsg" class="muted">&nbsp;</p>
 
 <p id="mgmtbanner" hidden></p>
@@ -89,6 +92,16 @@ async function refresh() {
   document.getElementById('status').textContent =
     `${s.state}${s.now_playing ? ' \u2014 ' + s.now_playing : ''}` +
     (s.last_error ? ` \u00b7 ${s.last_error}` : '');
+
+  // The music not being mounted is not an ordinary error - nothing will play
+  // at all, and the cause is off the box entirely. It gets its own banner
+  // rather than a suffix on the status line, because this page starting up
+  // and saying nothing useful is exactly the failure it exists to prevent.
+  const lib = document.getElementById('library');
+  if (lib) {
+    lib.textContent = s.library_ok ? '' : s.library_error || 'Music is not mounted';
+    lib.hidden = !!s.library_ok;
+  }
   if (s.last_seen_uid) document.getElementById('uid').textContent = s.last_seen_uid;
 
   // Say plainly whether this card is already assigned. Without this the page

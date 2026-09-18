@@ -5,6 +5,7 @@ Deliberately tiny: OwnTone's UI on :3689 owns everything player-related.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import time
 import threading
@@ -91,6 +92,29 @@ def create_app(config, controller, store, owntone=None, power=None) -> Flask:
         return render_template("index.html",
                                owntone_port=urlparse(config.owntone_url).port or 3689)
 
+    def library_state():
+        """Whether the music is actually reachable, as (ok, explanation).
+
+        The jukebox deliberately starts without it -- a NAS that fails to
+        resolve should leave a page that explains itself, not a silent box --
+        so the page has to be the thing that says so.
+
+        A dead CIFS mount does not raise FileNotFoundError. It raises OSError
+        ENODEV, "No such device", which is what /srv/music returned the night
+        the NAS stopped resolving. Catching only the tidy exception would have
+        taken down the very page meant to report the problem.
+        """
+        root = str(config.library_root)
+        try:
+            entries = os.listdir(root)
+        except OSError as exc:
+            return False, f"Music is not mounted at {root} ({exc.strerror})"
+        if not entries:
+            # An automount point with nothing under it is indistinguishable
+            # from a mount that failed, because that is what it is.
+            return False, f"Music is not mounted at {root} (nothing there)"
+        return True, None
+
     @app.get("/api/status")
     def status():
         # Resolve the last scanned card here rather than in the controller:
@@ -99,6 +123,7 @@ def create_app(config, controller, store, owntone=None, power=None) -> Flask:
         # reads as if that album is what the card maps to.
         uid = controller.last_seen_uid
         card = store.get(uid) if uid else None
+        library_ok, library_error = library_state()
         return jsonify(
             state=controller.state.value,
             now_playing=controller.now_playing,
@@ -109,6 +134,8 @@ def create_app(config, controller, store, owntone=None, power=None) -> Flask:
             last_seen_path=card.path if card else None,
             management_mode=controller.management_mode,
             outputs=selected_outputs(),
+            library_ok=library_ok,
+            library_error=library_error,
         )
 
     @app.put("/api/management")

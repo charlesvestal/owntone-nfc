@@ -402,3 +402,70 @@ def test_start_over_surfaces_an_owntone_failure(app_ctx):
 def test_the_page_offers_start_over(app_ctx):
     client, _, _ = app_ctx
     assert "Start over" in client.get("/").get_data(as_text=True)
+
+
+# --- library availability --------------------------------------------------
+#
+# The jukebox now starts even when the music is not mounted, so that a NAS
+# that fails to resolve leaves an admin page explaining itself rather than a
+# silent box. That is only worth anything if the page actually says so.
+
+
+def test_status_reports_a_healthy_library(app_ctx):
+    client, _, _ = app_ctx
+    body = client.get("/api/status").get_json()
+    assert body["library_ok"] is True
+    assert body["library_error"] is None
+
+
+def test_status_reports_a_library_that_is_not_there(tmp_path):
+    """The observed failure: the CIFS mount did not happen, so the mount point
+    is an empty directory or missing altogether."""
+    config = Config(library_root=tmp_path / "nothing-here",
+                    cards_file=tmp_path / "cards.yaml")
+    store = CardStore(config.cards_file)
+    controller = Controller(FakeOwnTone(), store, FakeSnapshot(), config,
+                            clock=FakeClock())
+    app = create_app(config, controller, store)
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get("/api/status").get_json()
+
+    assert body["library_ok"] is False
+    assert "not mounted" in body["library_error"].lower()
+
+
+def test_an_empty_library_root_counts_as_not_mounted(tmp_path):
+    """An automount point with nothing under it looks exactly like a mount
+    that failed, because that is what it is."""
+    root = tmp_path / "srv-music"
+    root.mkdir()
+    config = Config(library_root=root, cards_file=tmp_path / "cards.yaml")
+    store = CardStore(config.cards_file)
+    controller = Controller(FakeOwnTone(), store, FakeSnapshot(), config,
+                            clock=FakeClock())
+    app = create_app(config, controller, store)
+    app.config.update(TESTING=True)
+
+    body = app.test_client().get("/api/status").get_json()
+
+    assert body["library_ok"] is False
+
+
+def test_a_broken_mount_is_reported_rather_than_raising(app_ctx, monkeypatch):
+    """A dead CIFS mount does not raise FileNotFoundError -- it raises OSError
+    ENODEV ("No such device"), which is what /srv/music actually did. An
+    unhandled one here would take the whole status endpoint down, and with it
+    the page that is supposed to explain the problem."""
+    import nfc_jukebox.web as web_module
+
+    client, _, _ = app_ctx
+
+    def boom(_path):
+        raise OSError(19, "No such device")
+
+    monkeypatch.setattr(web_module.os, "listdir", boom)
+    body = client.get("/api/status").get_json()
+
+    assert body["library_ok"] is False
+    assert "No such device" in body["library_error"]
