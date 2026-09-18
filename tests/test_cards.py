@@ -1,6 +1,6 @@
 import logging
 
-from nfc_jukebox.cards import Card, CardStore, normalise_uid
+from nfc_jukebox.cards import Card, CardStore, name_for_path, normalise_uid
 
 
 def test_normalise_uid_strips_separators_and_lowercases():
@@ -44,8 +44,6 @@ def test_malformed_entry_does_not_lose_the_whole_registry(tmp_path, caplog):
         "  path: Miles Davis/Kind of Blue\n"
         "deadbeef:\n"
         "  name: Missing Path\n"          # no path key
-        "cafebabe:\n"
-        "  path: Only/A/Path\n"           # no name key
         "badbad01: just a string\n"       # not a mapping at all
         "badbad02:\n"                     # null entry
     )
@@ -55,8 +53,23 @@ def test_malformed_entry_does_not_lose_the_whole_registry(tmp_path, caplog):
     assert set(loaded) == {"04a2b3c4"}
     assert loaded["04a2b3c4"].name == "Kind of Blue"
     logged = caplog.text
-    for uid in ("deadbeef", "cafebabe", "badbad01", "badbad02"):
+    for uid in ("deadbeef", "badbad01", "badbad02"):
         assert uid in logged
+
+
+def test_entry_without_a_name_is_valid_and_takes_the_album_folder(tmp_path):
+    # The path already names the album, so `name` is optional - a card entry
+    # missing one must load, not be discarded as malformed.
+    path = tmp_path / "cards.yaml"
+    path.write_text("cafebabe:\n  path: Miles Davis/Kind of Blue\n")
+    loaded = CardStore(path).load()
+    assert loaded["cafebabe"].name == "Kind of Blue"
+
+
+def test_name_for_path_uses_the_last_segment():
+    assert name_for_path("Miles Davis/Kind of Blue") == "Kind of Blue"
+    assert name_for_path("Miles Davis/Kind of Blue/") == "Kind of Blue"
+    assert name_for_path("Single") == "Single"
 
 
 def test_corrupt_file_degrades_to_empty_instead_of_raising(tmp_path, caplog):

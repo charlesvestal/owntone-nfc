@@ -16,8 +16,8 @@
 <h2>Register a card</h2>
 <p>Tap a card on the reader. Its ID appears here.</p>
 <p id="uid">—</p>
-<label>Name <input id="name"></label>
-<label>Album <select id="album"></select></label>
+<label>Album <select id="album" onchange="syncName()"></select></label>
+<label>Name <input id="name" placeholder="(optional)"></label>
 <button id="save">Save</button>
 
 <h2>Cards</h2>
@@ -54,10 +54,19 @@ async function refresh() {
   const tbody = document.getElementById('cards');
   tbody.replaceChildren(...c.cards.map(cardRow));
 }
+// The album path already names the record, so the name box is a convenience
+// for friendly labels, not required entry. Mirror the album into it so it is
+// obvious what will be stored, and leaving it alone costs nothing.
+function syncName() {
+  const album = document.getElementById('album').value || '';
+  document.getElementById('name').placeholder =
+    album.split('/').pop() || '(optional)';
+}
 async function loadAlbums() {
   const a = await (await fetch('/api/albums')).json();
   document.getElementById('album').replaceChildren(
     ...a.albums.map(x => el('option', x)));
+  syncName();
 }
 async function save() {
   const uid = document.getElementById('uid').textContent;

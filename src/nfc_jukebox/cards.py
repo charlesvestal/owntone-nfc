@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from pathlib import PurePosixPath
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,10 +26,20 @@ def normalise_uid(raw: str) -> str:
     return _SEPARATORS.sub("", raw).lower()
 
 
+def name_for_path(path: str) -> str:
+    """A display label derived from the album folder.
+
+    The path already names the album, so asking for a separate name is
+    redundant typing. A name is still allowed - for a friendly label like
+    "Bedtime Songs" - but it is never required.
+    """
+    return PurePosixPath(path.strip("/")).name or path
+
+
 @dataclass
 class Card:
     uid: str
-    name: str
+    name: str  # display only; defaults to the album folder name
     path: str  # relative to the library root
 
 
@@ -89,14 +100,16 @@ class CardStore:
         for uid, entry in raw.items():
             # cards.yaml is hand-edited and restored from backup; one bad
             # entry must cost that card, not the whole record collection.
-            if not isinstance(entry, dict) or "name" not in entry or "path" not in entry:
+            if not isinstance(entry, dict) or "path" not in entry:
                 log.warning(
                     "Skipping malformed card entry for UID %s in %s: "
-                    "expected a mapping with 'name' and 'path'", uid, self._path,
+                    "expected a mapping with a 'path'", uid, self._path,
                 )
                 continue
             key = normalise_uid(str(uid))
-            cards[key] = Card(uid=key, name=entry["name"], path=entry["path"])
+            cards[key] = Card(uid=key,
+                              name=entry.get("name") or name_for_path(entry["path"]),
+                              path=entry["path"])
         return cards
 
     def save(self, cards: dict[str, Card]) -> None:
