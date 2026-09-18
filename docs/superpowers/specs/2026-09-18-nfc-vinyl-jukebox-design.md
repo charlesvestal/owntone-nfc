@@ -127,15 +127,20 @@ verified across both a release cycle and a reboot.*
 ```yaml
 04a2b3c4d5e680:
   name: "Kind of Blue"
-  path: "/srv/music/Miles Davis/Kind of Blue"
+  path: "Miles Davis/Kind of Blue"   # relative to the library root
 ```
 
-Entries store a **path prefix, not an OwnTone numeric ID**, and are queued via
-OwnTone's `expression` query against the path. Numeric IDs can shift on a full
-library rescan; a path prefix will not.
+Entries store a **library-root-relative path, not an OwnTone numeric ID**, and are
+queued via OwnTone's `expression` query against the path.
 
-**Fallback if path expressions misbehave:** store `library:album:<id>` and add a
-re-resolve step after each rescan. See Spike 1.
+This is load-bearing for portability. Numeric IDs are assigned at scan time, so they
+differ on every rebuild — every mapping would break when redeployed to a new SD card.
+A relative path survives a new card, a local→NAS switch, and a change of mount point.
+Re-registering cards after a rebuild is the one thing this system must never require.
+
+Consequence: the `library:album:<id>` approach used by the Instructables build is
+**ruled out**, not merely riskier. Spike 1 verifies the expression syntax works, not
+whether to use it.
 
 ## Music library
 
@@ -162,10 +167,20 @@ network is down. A 256GB card holds a few hundred FLAC albums.
 
 Populated by rsync from the NAS, or drag-and-drop onto the Pi's Samba share.
 
-**Decided: local storage.** Confirmed acceptable as a constraint, so no NAS mount and
-no cron-rescan machinery is built. (Recorded only in case it is ever revisited:
-mounting would require `x-systemd.automount`, `RequiresMountsFor=` ordering on the
-OwnTone unit, and a scheduled rescan.)
+**Decided: the library root is a configurable mount point.** Both are supported:
+
+- **Local storage** — simplest, real-time inotify updates, boot order irrelevant.
+  Constrained by card size: the library is ~56GB and a 64GB card cannot hold it
+  alongside the OS, so local means a *subset* until a larger card arrives.
+- **NAS mount** — the answer to the capacity squeeze. The two problems above are
+  mitigable, not fatal:
+  - Boot ordering (#690): `x-systemd.automount` in fstab plus a
+    `RequiresMountsFor=/srv/music` drop-in on `owntone.service`, so OwnTone cannot
+    start before the mount exists.
+  - No inotify: a cron job dropping an `.init-rescan` trigger file — OwnTone's own
+    documented workaround.
+
+Either can be chosen at deploy time without touching the card mappings.
 
 Out of scope: Spotify, web radio, podcasts. (Apple Music is not possible — there is
 no usable Linux client.)
