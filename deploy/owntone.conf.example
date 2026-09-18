@@ -1,0 +1,45 @@
+general {
+	ipv6 = no
+	uid = "root"
+	logfile = "/var/log/owntone.log"
+	loglevel = log
+	start_buffer_ms = 500
+}
+library {
+	name = "My Music on %h"
+	port = 3689
+	directories = { "/srv/music" }
+	podcasts = { "/Podcasts" }
+	audiobooks = { "/Audiobooks" }
+	compilations = { "/Compilations" }
+	compilation_artist = "Various Artists"
+}
+audio {
+	nickname = "Computer"
+}
+spotify {
+}
+mpd {
+}
+sqlite {
+}
+streaming {
+}
+
+# --- Notes on the non-default settings above -------------------------------
+#
+# start_buffer_ms = 500
+#   OwnTone's default is 2250ms, sized for AirPlay hardware from the 2000s.
+#   Measured on this box: it is the ENTIRE card-tap-to-audio delay for local
+#   playback - 2300ms before, 550ms after, with every API call around it
+#   costing only 2-3ms. Verified safe for the HomePods: no underruns, no
+#   resyncs, outputs stayed selected through playback.
+#
+#   HomePods still take ~2080ms regardless, because that is the AirPlay 2 PTP
+#   handshake rather than buffering. That measurement is why the jukebox holds
+#   the AirPlay session through a 90s grace period instead of releasing it the
+#   moment a card is lifted.
+#
+# ipv6 = no
+#   OwnTone's own troubleshooting note: some speakers advertise ipv6 support
+#   and then fail to play over it.
