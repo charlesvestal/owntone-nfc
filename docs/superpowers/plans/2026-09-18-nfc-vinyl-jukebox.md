@@ -389,7 +389,14 @@ output works.
 
 **Why stage it through the Mac.** Testing against the Mac separates "can OwnTone send
 AirPlay at all" from "will this particular Apple TV / HomePod arrangement cooperate" —
-two failures that look identical from the Pi.
+two failures that look identical from the Pi. It also keeps the HomePods quiet during
+development.
+
+**Why the Mac rather than shairport-sync.** shairport-sync is a third-party
+reimplementation of AirPlay; the Mac runs Apple's own AirPlay 2 receiver stack, the same
+lineage as the HomePod. A pass against the Mac carries real information about HomePod
+compatibility; a pass against shairport-sync mostly tests shairport-sync. Install it
+later if a permanently silent sink is wanted, but do not make it the gate.
 
 **Read the stages asymmetrically.** A Mac success proves the send path works end to end.
 A Mac *failure* does **not** predict HomePod failure — they are different authentication
@@ -420,7 +427,11 @@ paths. Never abandon the design on a Stage A failure alone; always run Stage B.
   open — and fails with a 500 and `requires a valid PIN or password` in the log. Leaving
   this on produces a failure that has nothing to do with your speakers.
 
-- [ ] **Step A2: Confirm the Mac appears and plays**
+- [ ] **Step A2: Turn the Mac's system volume down before anything plays**
+
+Set it low but not muted — you need to hear *something* to confirm the path works.
+
+- [ ] **Step A3: Confirm the Mac appears and plays**
 
 ```bash
 curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool | grep -B2 -A3 airplay
@@ -434,13 +445,17 @@ curl -s -X POST "http://jukebox.local:3689/api/queue/items/add?expression=media_
 Expected: audible music from the Mac's speakers. Approve the pairing prompt if one
 appears — the Mac raises one on each reconnect, which is normal and not a HomePod signal.
 
-- [ ] **Step A3: Record the outcome**
+- [ ] **Step A4: Record the outcome**
 
 If Stage A passes, the OwnTone AirPlay send path is proven and any Stage B failure is
 specific to the Apple TV / HomePod arrangement. Note that distinction in the runbook —
 it is what tells you which fallback to reach for.
 
 #### Stage B — the HomePods
+
+**Never blast the HomePods.** Output volume is settable *before* playback starts and is
+independent of the queue, so every Stage B test begins by turning the target down. This
+is the point of Step 2 below — do not skip it and "just be quick".
 
 - [ ] **Step 1: Fix the Apple-side permission FIRST**
 
@@ -472,13 +487,18 @@ curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool
 
 Expected: an entry with `"type": "airplay"` named after the HomePod pair.
 
-- [ ] **Step 4: Select the output and play**
+- [ ] **Step 4: Select the output, turn it DOWN, then play**
 
 ```bash
 OUT=$(curl -s http://jukebox.local:3689/api/outputs \
   | python3 -c "import sys,json; print([o['id'] for o in json.load(sys.stdin)['outputs'] if o['type']=='airplay'][0])")
 curl -s -X PUT -H 'Content-Type: application/json' \
   -d "{\"outputs\":[\"$OUT\"]}" http://jukebox.local:3689/api/outputs/set
+
+# Turn the HomePods down BEFORE any audio is queued. Per-output volume is
+# independent of playback state, so this cannot be "too early".
+curl -s -X PUT -H 'Content-Type: application/json' \
+  -d '{"volume": 5}' "http://jukebox.local:3689/api/outputs/$OUT"
 curl -s -X POST "http://jukebox.local:3689/api/queue/items/add?expression=media_kind+is+music&limit=1&clear=true&playback=start"
 ```
 
