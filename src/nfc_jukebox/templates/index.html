@@ -20,6 +20,11 @@
 <p class="muted">Player controls, volume and speakers live in
   <a id="owntone" href="#">OwnTone</a>.</p>
 
+<p class="muted">Lifting a card pauses the record and putting it back picks up
+  where it left off, so this is the only way back to track 1 mid-side.</p>
+<button id="startover" onclick="startOver()">Start over</button>
+<p id="startovermsg" class="muted">&nbsp;</p>
+
 <p id="mgmtbanner" hidden></p>
 <label><input type="checkbox" id="mgmt" onchange="setMgmt()">
   <strong>Management mode</strong> &mdash; cards identify themselves but do not play</label>
@@ -183,6 +188,23 @@ async function power(action) {
     // The box may have gone away before answering, which is success, not failure.
     msg.textContent = verb.charAt(0).toUpperCase() + verb.slice(1) + ' requested.';
   }
+}
+
+async function startOver() {
+  const msg = document.getElementById('startovermsg');
+  msg.textContent = 'Starting over…';
+  try {
+    const r = await fetch('/api/startover', {method: 'POST'});
+    const body = await r.json().catch(() => ({}));
+    // Say why it did not work rather than leaving "Starting over..." on screen
+    // forever: 409 means nothing is loaded, which is a normal thing to hit.
+    msg.textContent = r.ok
+      ? 'Playing ' + (body.now_playing || 'the album') + ' from track 1.'
+      : (body.error || 'Could not start the album over.');
+  } catch (e) {
+    msg.textContent = 'Could not reach the jukebox.';
+  }
+  refresh();
 }
 
 async function setMgmt() {

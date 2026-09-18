@@ -1,3 +1,5 @@
+import datetime
+
 import httpx
 import pytest
 
@@ -18,6 +20,25 @@ class FakeClock:
         self.now += seconds
 
 
+class FakeWallClock:
+    """The *second* time source: local wall-clock time, for "has 3am happened".
+
+    Separate from FakeClock on purpose, exactly as in the controller: durations
+    are measured on the monotonic clock, and only the question "which side of
+    the reset hour are we on" is asked of this one. Tests drive it explicitly
+    so nothing has to sleep or move the machine's clock.
+    """
+
+    def __init__(self, at: str = "2026-09-18 20:00") -> None:
+        self.now = datetime.datetime.fromisoformat(at)
+
+    def __call__(self) -> datetime.datetime:
+        return self.now
+
+    def set(self, at: str) -> None:
+        self.now = datetime.datetime.fromisoformat(at)
+
+
 class FakeOwnTone:
     """A stand-in for the REST client.
 
@@ -33,6 +54,11 @@ class FakeOwnTone:
             {"id": "1", "type": "ALSA", "selected": True},
             {"id": "2", "type": "AirPlay 2", "selected": False},
         ]
+        # The queue and the transport state are modelled because the resume
+        # rule depends on both: the position lives in OwnTone's queue, and
+        # "the side has run out" is only visible as the player stopping.
+        self.queue = 0
+        self.player = "stop"
 
     def _ids(self, predicate):
         return [o["id"] for o in self.outputs if predicate(o)]
@@ -59,18 +85,36 @@ class FakeOwnTone:
 
     def play_album(self, path):
         self.calls.append(("play_album", path))
+        self.queue = 12
+        self.player = "play"
 
     def play(self):
         self.calls.append(("play",))
+        self.player = "play"
 
     def pause(self):
         self.calls.append(("pause",))
+        self.player = "pause"
 
     def stop(self):
         self.calls.append(("stop",))
+        self.player = "stop"
 
     def clear_queue(self):
         self.calls.append(("clear_queue",))
+        self.queue = 0
+        self.player = "stop"
+
+    def queue_length(self):
+        self.calls.append(("queue_length",))
+        return self.queue
+
+    def player_state(self):
+        return {"state": self.player}
+
+    def finish_album(self):
+        """What OwnTone looks like when the last track has played out."""
+        self.player = "stop"
 
 
 class FakeCards:
@@ -93,16 +137,25 @@ class FakeSnapshot:
 
 
 @pytest.fixture
-def ctx():
+def wall():
+    return FakeWallClock()
+
+
+@pytest.fixture
+def ctx(wall):
     clock = FakeClock()
     owntone = FakeOwnTone()
     cards = FakeCards({
         "aaaa": Card(uid="aaaa", name="Blue", path="Miles Davis/Kind of Blue"),
         "bbbb": Card(uid="bbbb", name="Rumours", path="Fleetwood Mac/Rumours"),
+        # Only ever used by _prime, which has to leave a *different* record on
+        # the platter from the one the test under way is about.
+        "cccc": Card(uid="cccc", name="Primer", path="Various/Primer"),
     })
     snapshot = FakeSnapshot()
-    config = Config(bump_window_s=0.5, grace_period_s=90.0)
-    controller = Controller(owntone, cards, snapshot, config, clock=clock)
+    config = Config(grace_period_s=90.0)
+    controller = Controller(owntone, cards, snapshot, config,
+                            clock=clock, wall_clock=wall)
     return controller, owntone, snapshot, clock
 
 
@@ -121,7 +174,7 @@ def test_card_removed_pauses_immediately(ctx):
     assert controller.state is State.PAUSED
 
 
-def test_same_card_within_bump_window_resumes(ctx):
+def test_same_card_replaced_at_once_resumes(ctx):
     controller, owntone, _, clock = ctx
     controller.on_card_present("aaaa")
     controller.on_card_removed()
@@ -132,13 +185,39 @@ def test_same_card_within_bump_window_resumes(ctx):
     assert album_calls == [("play_album", "Miles Davis/Kind of Blue")]
 
 
-def test_same_card_after_bump_window_restarts(ctx):
+def test_same_card_resumes_however_long_it_has_been_off(ctx):
+    """Lifting a card is how you pause a record player, and pausing must not
+    lose your place. The record stays on the platter until a different one is
+    put on - so there is no window after which the same card starts over."""
     controller, owntone, _, clock = ctx
     controller.on_card_present("aaaa")
     controller.on_card_removed()
-    clock.advance(5.0)
+    clock.advance(3600.0)
+    controller.tick()  # grace expired long ago; the outputs were released
     controller.on_card_present("aaaa")
-    assert sum(1 for c in owntone.calls if c[0] == "play_album") == 2
+    assert sum(1 for c in owntone.calls if c[0] == "play_album") == 1
+    assert owntone.calls[-1] == ("play",)
+    assert controller.state is State.PLAYING
+    assert controller.now_playing == "Blue"
+
+
+def test_a_resume_after_a_release_re_selects_the_speakers(ctx):
+    """The release handed the HomePods back, so a resume has to take them
+    again - otherwise the record comes back out of the wrong speaker."""
+    controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)
+    snapshot.save(["1", "2"])
+    controller.on_card_present("aaaa")
+    assert owntone.selected_output_ids() == ["1", "2"]
+
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    assert owntone.selected_output_ids() == ["1"]  # HomePod handed back
+
+    controller.on_card_present("aaaa")
+    assert owntone.selected_output_ids() == ["1", "2"]
+    assert controller.state is State.PLAYING
 
 
 def test_different_card_switches_immediately(ctx):
@@ -148,17 +227,298 @@ def test_different_card_switches_immediately(ctx):
     assert ("play_album", "Fleetwood Mac/Rumours") in owntone.calls
 
 
-def test_grace_expiry_stops_and_releases_airplay(ctx):
+def test_a_different_card_starts_from_track_one_not_where_it_left_off(ctx):
+    """Only one record is on the platter at a time. Putting a different one on
+    is what ends the first one's place."""
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+
+    controller.on_card_present("bbbb")
+    assert ("play_album", "Fleetwood Mac/Rumours") in owntone.calls
+
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    controller.on_card_present("aaaa")  # back to the first record
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+    assert ("play",) not in owntone.calls
+
+
+def test_grace_expiry_releases_airplay_without_losing_the_place(ctx):
+    """Releasing the speakers is the part that matters: the HomePods must go
+    idle and become available to other senders. Stopping and clearing the
+    queue would throw the position away, and the position is the whole point
+    of the pause."""
     controller, owntone, _, clock = ctx
     owntone.outputs[1]["selected"] = True  # AirPlay selected
     controller.on_card_present("aaaa")
     controller.on_card_removed()
     clock.advance(91.0)
     controller.tick()
-    assert ("stop",) in owntone.calls
-    assert ("clear_queue",) in owntone.calls
     assert owntone.selected_output_ids() == ["1"]  # AirPlay deselected
+    assert ("stop",) not in owntone.calls
+    assert ("clear_queue",) not in owntone.calls
+    assert owntone.queue == 12  # the album is still loaded
     assert controller.state is State.IDLE
+
+
+def test_a_finished_album_starts_over_on_the_next_tap(ctx):
+    """A record that played its last groove has no place left to hold."""
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+
+    owntone.finish_album()
+    clock.advance(30.0)
+    controller.tick()
+
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    controller.on_card_present("aaaa")
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+    assert ("play",) not in owntone.calls
+
+
+def test_a_paused_album_is_not_mistaken_for_a_finished_one(ctx):
+    """OwnTone reports `pause` for a card lifted mid-track and `stop` only
+    when the queue has run out. Confusing the two would throw the place away
+    on every lift."""
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    assert owntone.player_state()["state"] == "pause"
+    clock.advance(30.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    controller.on_card_present("aaaa")
+    assert ("play",) in owntone.calls
+    assert not any(c[0] == "play_album" for c in owntone.calls)
+
+
+def test_the_finished_check_is_not_run_on_every_tick(ctx):
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    polls = []
+    owntone.player_state = lambda: (polls.append(1), {"state": "play"})[1]
+    for _ in range(10):
+        clock.advance(1.0)
+        controller.tick()
+    assert len(polls) <= 1
+
+
+def test_a_stale_loaded_album_does_not_resume_into_an_empty_queue(ctx):
+    """OwnTone restarting under us empties the queue while our memory of what
+    is loaded survives. Resuming then would be silence, so the check is what
+    OwnTone actually has, not what we remember."""
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+
+    owntone.queue = 0  # OwnTone restarted; the queue went with it
+    owntone.calls.clear()
+
+    controller.on_card_present("aaaa")
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+    assert controller.state is State.PLAYING
+
+
+def test_a_failed_queue_check_starts_the_album_rather_than_risking_silence(ctx):
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.queue_length = _boom
+    owntone.calls.clear()
+
+    controller.on_card_present("aaaa")
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+    assert controller.state is State.PLAYING
+
+
+# --- start over ------------------------------------------------------------
+
+
+def test_start_over_restarts_the_loaded_album(ctx):
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    assert controller.start_over() == "Blue"
+
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+    assert controller.state is State.PLAYING
+    assert controller.now_playing == "Blue"
+
+
+def test_start_over_re_selects_the_speakers_too(ctx):
+    controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)
+    snapshot.save(["1", "2"])
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    assert owntone.selected_output_ids() == ["1"]
+
+    controller.start_over()
+
+    assert owntone.selected_output_ids() == ["1", "2"]
+
+
+def test_start_over_with_nothing_loaded_says_so(ctx):
+    controller, owntone, _, _ = ctx
+    with pytest.raises(LookupError):
+        controller.start_over()
+    assert not any(c[0] == "play_album" for c in owntone.calls)
+
+
+def test_start_over_after_a_finished_album_has_nothing_to_restart(ctx):
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    owntone.finish_album()
+    clock.advance(30.0)
+    controller.tick()
+    with pytest.raises(LookupError):
+        controller.start_over()
+
+
+def test_start_over_surfaces_an_owntone_failure(ctx):
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+    owntone.play_album = _boom
+    with pytest.raises(RuntimeError):
+        controller.start_over()
+    assert controller.last_error is not None
+
+
+def test_start_over_mid_album_does_not_need_the_card_lifted(ctx):
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+    owntone.calls.clear()
+    controller.start_over()
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+    assert controller.state is State.PLAYING
+
+
+# --- the nightly reset -----------------------------------------------------
+#
+# An album left unfinished at midnight should not still be waiting mid-side at
+# lunchtime the next day. The reset hour is a wall-clock question, which is why
+# the controller carries a second, separate time source: the monotonic clock
+# cannot answer "has 3am happened", and the wall clock must never be used for
+# the grace period, where an NTP step would strand a paused card.
+
+
+def test_an_album_loaded_last_night_starts_fresh_after_the_reset_hour(ctx, wall):
+    controller, owntone, _, clock = ctx
+    wall.set("2026-09-18 23:00")
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    wall.set("2026-09-19 10:00")  # 3am has been and gone
+    controller.on_card_present("aaaa")
+
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+    assert ("play",) not in owntone.calls
+
+
+def test_the_same_night_still_resumes_across_midnight(ctx, wall):
+    controller, owntone, _, clock = ctx
+    wall.set("2026-09-18 23:00")
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    wall.set("2026-09-19 02:00")  # still the same evening, by the 3am rule
+    controller.on_card_present("aaaa")
+
+    assert ("play",) in owntone.calls
+    assert not any(c[0] == "play_album" for c in owntone.calls)
+
+
+def test_the_reset_hour_can_be_turned_off(ctx, wall):
+    controller, owntone, snapshot, clock = ctx
+    controller._config = Config(grace_period_s=90.0, resume_reset_hour=None)
+    wall.set("2026-09-18 23:00")
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    wall.set("2026-09-25 10:00")  # a week and seven 3ams later
+    controller.on_card_present("aaaa")
+
+    assert ("play",) in owntone.calls
+    assert not any(c[0] == "play_album" for c in owntone.calls)
+
+
+def test_the_reset_hour_does_not_interrupt_a_playing_album(ctx, wall):
+    """It decides what the *next* tap does. A record playing through 3am keeps
+    playing; nothing about the reset touches the transport."""
+    controller, owntone, _, clock = ctx
+    wall.set("2026-09-19 02:55")
+    controller.on_card_present("aaaa")
+    owntone.calls.clear()
+
+    wall.set("2026-09-19 03:05")
+    clock.advance(30.0)
+    controller.tick()
+
+    assert controller.state is State.PLAYING
+    assert not any(c[0] in ("stop", "pause", "clear_queue") for c in owntone.calls)
+
+
+def test_a_reset_that_passed_mid_album_only_bites_on_the_next_tap(ctx, wall):
+    controller, owntone, _, clock = ctx
+    wall.set("2026-09-19 02:55")
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    wall.set("2026-09-19 03:05")
+    controller.on_card_present("aaaa")
+
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+
+
+def test_starting_an_album_after_the_reset_hour_sets_a_fresh_deadline(ctx, wall):
+    """The clock that matters is when the album was loaded, not the calendar
+    day: a record put on at 10am resumes all afternoon."""
+    controller, owntone, _, clock = ctx
+    wall.set("2026-09-19 10:00")
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    wall.set("2026-09-19 22:00")
+    controller.on_card_present("aaaa")
+
+    assert ("play",) in owntone.calls
+    assert not any(c[0] == "play_album" for c in owntone.calls)
 
 
 def test_snapshot_restored_on_next_card(ctx):
@@ -260,7 +620,7 @@ def test_last_error_is_cleared_by_a_successful_start(ctx):
     assert controller.last_error is None
 
 
-def test_last_error_is_cleared_by_a_successful_bump_resume(ctx):
+def test_last_error_is_cleared_by_a_successful_resume(ctx):
     controller, owntone, _, clock = ctx
     controller.on_card_present("aaaa")
     controller.on_card_removed()
@@ -335,7 +695,7 @@ def test_same_card_re_presented_while_playing_is_a_noop(ctx):
     controller, owntone, _, clock = ctx
     controller.on_card_present("aaaa")
     before = list(owntone.calls)
-    clock.advance(30.0)  # well past the bump window; the card never left
+    clock.advance(30.0)  # the card never left the platter
     controller.on_card_present("aaaa")
     assert owntone.calls == before
     assert controller.state is State.PLAYING
@@ -361,7 +721,7 @@ def test_play_album_failure_does_not_escape_and_is_recorded(ctx):
     assert controller.now_playing is None
 
 
-def test_bump_resume_failure_does_not_escape(ctx):
+def test_resume_failure_does_not_escape(ctx):
     controller, owntone, _, clock = ctx
     controller.on_card_present("aaaa")
     controller.on_card_removed()
@@ -451,7 +811,9 @@ def test_release_failure_does_not_escape(ctx):
     controller, owntone, _, clock = ctx
     controller.on_card_present("aaaa")
     controller.on_card_removed()
-    owntone.stop = _boom
+    # Handing the speakers back is the only OwnTone call a release still makes,
+    # now that stopping and clearing would throw the position away.
+    owntone.set_outputs = _boom
     clock.advance(91.0)
     controller.tick()
     assert controller.last_error is not None
@@ -741,13 +1103,17 @@ def test_leaving_management_mode_restores_normal_playback(ctx):
 def _prime(controller, owntone, snapshot, clock):
     """Run one full card cycle so the controller has a record of what it set.
 
+    Deliberately with a card no other test uses: a cycle leaves that record on
+    the platter, and priming with the test's own card would turn its next tap
+    into a resume.
+
     Fresh out of the box it has none, and then deliberately leaves the
     selection alone (see test_first_card_after_a_restart_leaves_the_selection
     _alone). Tests about the steady state need to be past that first cycle.
     The empty snapshot keeps the cycle itself from tripping the shrink policy.
     """
     snapshot.value = []
-    controller.on_card_present("aaaa")
+    controller.on_card_present("cccc")
     controller.on_card_removed()
     clock.advance(91.0)
     controller.tick()

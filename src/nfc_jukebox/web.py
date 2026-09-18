@@ -144,6 +144,26 @@ def create_app(config, controller, store, owntone=None, power=None) -> Flask:
             return jsonify(error=f"Could not {action}: {exc}"), 500
         return jsonify(action=action)
 
+    @app.post("/api/startover")
+    def start_over():
+        """Restart the loaded album from track 1.
+
+        The one transport control this page carries, and only because the
+        vinyl model took the other one away: lifting a card used to rewind the
+        record and now it pauses it. Nothing to validate - the request has no
+        parameters, and the only question is whether there is a record on the
+        platter, which only the controller can answer.
+        """
+        try:
+            now_playing = controller.start_over()
+        except LookupError as exc:
+            # Not an error in the box: there is simply nothing loaded yet.
+            return jsonify(error=str(exc)), 409
+        except Exception as exc:
+            log.exception("Start over failed")
+            return jsonify(error=f"Could not start the album over: {exc}"), 500
+        return jsonify(now_playing=now_playing)
+
     @app.get("/api/artwork")
     def artwork():
         """Album art for a library-relative path, as an OwnTone-relative URL.

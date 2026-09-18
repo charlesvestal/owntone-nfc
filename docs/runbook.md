@@ -222,14 +222,46 @@ space once you are happy with the NAS.
 so they survive a rebuild. The only thing that breaks them is changing the
 `<Artist>/<Album>` folder layout.
 
+## How the record behaves (changed 2026-09-18)
+
+Lifting a card **pauses**; putting the same card back **resumes where it left
+off**, however long it has been. The record stays on the platter until a
+different one is put on.
+
+- **Same card back** → resumes. No time limit.
+- **Different card** → clears the queue and starts that album from track 1.
+- **Album plays to its end** → the place is forgotten, so the next tap of that
+  card starts side one.
+- **Start over** on the admin page → restarts the loaded album from track 1.
+  This is the only way to rewind a record mid-side.
+- **Overnight** → `resume_reset_hour` (default 3am) draws a line under the day:
+  an album loaded before the most recent 3am is no longer resumable, so a
+  record abandoned at midnight starts fresh in the morning. Set it to `null` to
+  turn that off.
+
+**A reboot loses your place.** The position lives in OwnTone's queue and is not
+persisted anywhere - restarting `owntone` or `nfc-jukebox`, or rebooting the
+Pi, means the next tap starts from track 1. Nothing is broken when that
+happens; it is the same as lifting the tonearm and switching the amp off. The
+speaker choice is a different thing and *does* survive a reboot
+(`/var/lib/nfc-jukebox/outputs.json`).
+
+Note the grace timer no longer stops playback. At expiry it deselects the
+AirPlay outputs - so the HomePods still go idle and are free for other senders,
+which was always the point - and leaves the queue paused where it was.
+
 ## Retuning after the enclosure is built
 
-Both timing values are config, not code — edit `/etc/nfc-jukebox/config.yaml`
+The timing value is config, not code — edit `/etc/nfc-jukebox/config.yaml`
 and restart:
 
 - `presence_debounce_s` (0.5) — an enclosure adds air gap between card and
   reader, which will widen the absent-run. If cards start stuttering, raise it.
-- `bump_window_s` (0.25) — near-redundant now that presence is debounced.
+
+`bump_window_s` was removed on 2026-09-18 with the switch to resume-on-return:
+a dropped read and a deliberate lift both resume now, so there was nothing left
+for the window to decide. An old config file that still sets it is harmless -
+unknown keys are ignored - but the line does nothing and can be deleted.
 
 Re-measure with `spikes/presence_check.py` against the built box rather than
 guessing. Note the original measurement was taken on one card type and did not

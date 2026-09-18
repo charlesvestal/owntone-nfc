@@ -25,6 +25,9 @@ finally:
     clf.close()
 if seen:
     print(f"max gap between presence reads: {max_gap*1000:.0f} ms")
-    print(f"suggested bump_window_s: {max(0.2, max_gap*3):.2f}")
+    # bump_window_s is gone (a lift now resumes rather than restarts), so
+    # the gap only sets how long the reader must wait before calling a
+    # card lifted.
+    print(f"suggested presence_debounce_s: {max(0.5, max_gap*3):.2f}")
 else:
     print("no card seen")

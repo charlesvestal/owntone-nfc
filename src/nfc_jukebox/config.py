@@ -30,18 +30,6 @@ class Config:
     cards_file: Path = Path("/etc/nfc-jukebox/cards.yaml")
     outputs_file: Path = Path("/var/lib/nfc-jukebox/outputs.json")
     reader_device: str = "tty:AMA0:pn532"
-    # Measured, not guessed (Spike 2, 2026-09-18): a stationary NTAG213 on a
-    # PN532 over UART showed a 35ms worst-case gap between presence reads over
-    # ~11s. 0.25s is ~7x that margin, and safely below how fast a human can
-    # lift and replace a card - so a dropped read resumes, a deliberate lift
-    # restarts.
-    #
-    # That measurement was taken on a BARE board with the card resting on it.
-    # An enclosure adds distance and will widen the gap, so re-measure once the
-    # box is built by re-running spikes/presence_check.py on the Pi. This is a
-    # config value, so tuning it is an edit to /etc/nfc-jukebox/config.yaml plus
-    # a service restart - no code change needed.
-    bump_window_s: float = 0.25
     # How long a card must be continuously unseen before the reader calls it
     # lifted. See reader.DEFAULT_PRESENCE_DEBOUNCE_S for the measurements: a
     # 4-byte Mifare-Classic-style card reports itself absent hundreds of times
@@ -51,6 +39,16 @@ class Config:
     # record feels laggy.
     presence_debounce_s: float = reader.DEFAULT_PRESENCE_DEBOUNCE_S
     grace_period_s: float = 90.0
+    # Hour of the local day at which an unfinished album stops being resumable,
+    # so a record abandoned at midnight starts from track 1 the next morning
+    # rather than picking up mid-side. None turns the reset off entirely and
+    # the place is kept until a different card is played.
+    #
+    # An hour, not a duration, because the thing being modelled is "a new day",
+    # and 3am is when nobody is listening. Note 0 is a real setting (midnight),
+    # which is why turning it off needs the same explicit vocabulary reset_gpio
+    # uses rather than a falsy value.
+    resume_reset_hour: int | None = 3
     web_port: int = 8080
     # BCM pin wired to the PN532's RSTPDN (active-low reset). On the Waveshare
     # HAT this repo is built around, RSTPDN is jumpered to D20. Killing the
@@ -62,8 +60,7 @@ class Config:
 
     _PATH_FIELDS = ("library_root", "cards_file", "outputs_file")
     _STR_FIELDS = ("owntone_url", "reader_device")
-    _POSITIVE_FLOAT_FIELDS = ("bump_window_s", "presence_debounce_s",
-                              "grace_period_s")
+    _POSITIVE_FLOAT_FIELDS = ("presence_debounce_s", "grace_period_s")
 
     @classmethod
     def load(cls, path: Path = DEFAULT_CONFIG_PATH) -> "Config":
@@ -89,17 +86,20 @@ class Config:
         # default applies.
         values = {k: v for k, v in values.items() if v is not None}
 
-        # reset_gpio is the one field where None is a real setting ("no reset
-        # line is wired") rather than "fall back to the default", so it cannot
-        # ride the drop-None pass above. Coerce it afterwards instead.
-        if "reset_gpio" in raw:
+        # These two are the fields where None is a real setting ("no reset line
+        # is wired", "never reset the resume position") rather than "fall back
+        # to the default", so they cannot ride the drop-None pass above.
+        # Coerce them afterwards instead.
+        for name, converter in (("reset_gpio", cls._as_gpio),
+                                ("resume_reset_hour", cls._as_hour)):
+            if name not in raw:
+                continue
             try:
-                values["reset_gpio"] = cls._as_gpio(raw["reset_gpio"])
+                values[name] = converter(raw[name])
             except (TypeError, ValueError) as exc:
-                log.warning("Ignoring invalid config value for reset_gpio "
-                            "(%r): %s; using the default",
-                            raw["reset_gpio"], exc)
-                values.pop("reset_gpio", None)
+                log.warning("Ignoring invalid config value for %s (%r): %s; "
+                            "using the default", name, raw[name], exc)
+                values.pop(name, None)
 
         return cls(**values)
 
@@ -159,15 +159,18 @@ class Config:
             raise ValueError("must not be negative")
         return number
 
-    # Words an operator might reasonably type to mean "there is no reset line".
-    _GPIO_DISABLED_WORDS = ("", "none", "null", "off", "no", "disabled")
+    # Words an operator might reasonably type to mean "switched off". Shared by
+    # reset_gpio ("there is no reset line") and resume_reset_hour ("never reset
+    # the resume position"), because an operator editing YAML over SSH should
+    # not have to remember two spellings of off.
+    _DISABLED_WORDS = ("", "none", "null", "off", "no", "disabled")
 
     @classmethod
     def _as_gpio(cls, value) -> "int | None":
         """A BCM pin number, or None meaning 'no reset line is wired'."""
         if value is None:
             return None
-        if isinstance(value, str) and value.strip().lower() in cls._GPIO_DISABLED_WORDS:
+        if isinstance(value, str) and value.strip().lower() in cls._DISABLED_WORDS:
             return None
         if isinstance(value, bool) or not isinstance(value, (int, str)):
             raise TypeError("expected a BCM GPIO number, or null to disable")
@@ -175,6 +178,20 @@ class Config:
         if not 0 <= pin <= 53:
             raise ValueError("must be a BCM GPIO number between 0 and 53")
         return pin
+
+    @classmethod
+    def _as_hour(cls, value) -> "int | None":
+        """An hour of the local day, or None meaning 'never reset'."""
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip().lower() in cls._DISABLED_WORDS:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise TypeError("expected an hour 0-23, or null to disable")
+        hour = int(value)
+        if not 0 <= hour <= 23:
+            raise ValueError("must be an hour of the day between 0 and 23")
+        return hour
 
     @staticmethod
     def _as_port(value) -> int:

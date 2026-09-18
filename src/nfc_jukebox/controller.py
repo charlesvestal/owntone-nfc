@@ -1,12 +1,26 @@
 """The vinyl state machine.
 
-Put the record on, it plays from the start. Take it off, it stops. The grace
-period exists because AirPlay 2's PTP handshake costs a couple of seconds, so
-the session is held through short gaps and released only when the user is
-genuinely done.
+Put the record on and it plays. Take it off and it pauses - lifting a card is
+how you pause a record player, and pausing must not lose your place. The record
+stays on the platter until a different one is put on: the same card always
+resumes, a different card clears the queue and starts from track 1, and an
+album that plays out to its end leaves no place to hold.
+
+The grace period exists because AirPlay 2's PTP handshake costs a couple of
+seconds, so the session is held through short gaps and the speakers are handed
+back only when the user is genuinely done. That release now deselects the
+outputs *without* stopping or clearing the queue, which is what keeps the
+position alive across it.
+
+Two time sources, deliberately. Every duration - the grace period, the polling
+intervals - is measured on a monotonic clock, so an NTP step cannot strand a
+paused card or fire a release an hour early. The nightly resume reset is the
+one question a monotonic clock cannot answer ("has 3am happened yet?"), so it,
+and only it, reads a wall clock.
 """
 from __future__ import annotations
 
+import datetime
 import enum
 import logging
 import threading
@@ -32,6 +46,20 @@ log = logging.getLogger(__name__)
 # twelve seconds into side one rather than at the end of it.
 OUTPUT_CHECK_INTERVAL_S = 10.0
 
+# How often, while an album is playing, to ask OwnTone whether it still is.
+#
+# Shares the output check's cadence and its reasoning: one cheap GET on the
+# same 10s beat rather than a second polling rhythm to reason about. The event
+# being watched for - the last groove running out - is not urgent, it just has
+# to be noticed before the next card lands, and nobody taps a card within ten
+# seconds of side two ending.
+PLAYBACK_CHECK_INTERVAL_S = OUTPUT_CHECK_INTERVAL_S
+
+# What OwnTone reports in /api/player once the queue has played out. A card
+# lifted mid-track gives "pause"; only a finished (or stopped) queue gives
+# this. Confusing the two would throw the place away on every lift.
+_FINISHED_STATE = "stop"
+
 
 class State(enum.Enum):
     IDLE = "idle"
@@ -50,12 +78,21 @@ class _Outcome:
 
 class Controller:
     def __init__(self, owntone, cards, snapshot, config,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 wall_clock: Callable[[], datetime.datetime]
+                 = datetime.datetime.now) -> None:
         self._owntone = owntone
         self._cards = cards
         self._snapshot = snapshot
         self._config = config
         self._clock = clock
+        # Local wall-clock time, and used for exactly one thing: which side of
+        # the nightly reset hour we are on. Kept separate from `clock` rather
+        # than replacing it, because every *duration* here must stay on the
+        # monotonic clock - an NTP step mid-evening would otherwise either fire
+        # a release instantly or park a paused card for hours. Injected so the
+        # reset can be tested without sleeping or moving the system clock.
+        self._wall_clock = wall_clock
 
         # Three threads share one Controller: the reader (present/removed),
         # the tick thread (grace expiry) and Flask's workers (status reads).
@@ -83,7 +120,30 @@ class Controller:
         # Every scanned UID, known or not — this is what learn mode reads.
         self.last_seen_uid: str | None = None
         self.last_seen_at: float = 0.0
+        # The card on the platter right now: what the reader last announced and
+        # we acted on. Cleared whenever we stop believing anything is playing.
         self._last_uid: str | None = None
+
+        # Which card's album is sitting in OwnTone's queue, and when it was put
+        # there. Deliberately separate from `state` and from `_last_uid`: the
+        # queue outlives both, which is the whole point. A release hands the
+        # speakers back and leaves this alone, so the next tap of the same card
+        # resumes; a different card, a finished album, and management mode all
+        # clear it, so the next tap of *those* starts from track 1.
+        #
+        # In memory only, and deliberately so. The position it refers to lives
+        # in OwnTone's queue, which does not survive OwnTone restarting or the
+        # Pi rebooting either - persisting the memory of a position that is
+        # gone would only produce a confident resume into silence. Restarting
+        # the service therefore loses your place, which is the same thing
+        # lifting the tonearm and switching the amp off does.
+        #
+        # `_loaded_at` is a WALL-clock stamp, unlike every other timestamp in
+        # this class, because the only question asked of it is whether the
+        # reset hour has fallen between then and now.
+        self._loaded_uid: str | None = None
+        self._loaded_at: datetime.datetime | None = None
+
         self._paused_at = 0.0
         # The last selection we declined to save because it had only shrunk.
         # See _save_selection.
@@ -114,6 +174,7 @@ class Controller:
         # _check_outputs.
         self._intended_outputs: set[str] | None = None
         self._next_output_check = 0.0
+        self._next_playback_check = 0.0
         # Bumped whenever the intended set changes, so a check that started
         # before a new card arrived cannot publish its stale answer.
         self._outputs_generation = 0
@@ -137,8 +198,8 @@ class Controller:
             return
 
         # A still-seated card re-announced by the reader. Restarting the album
-        # from track 1 mid-listen is exactly what the bump window exists to
-        # prevent, so do nothing at all.
+        # mid-listen because the reader spoke twice would be maddening, so do
+        # nothing at all.
         if self.state is State.PLAYING and uid == self._last_uid:
             return
 
@@ -154,32 +215,14 @@ class Controller:
         # through every subsequent success.
         self.last_error = None
 
-        if self._is_bump(uid):
-            with self._guarded("resuming playback") as outcome:
-                self._owntone.play()
-            if outcome.ok:
-                self.state = State.PLAYING
-            # Otherwise stay PAUSED: the grace timer still owns the session,
-            # and a re-present can try again.
-            return
+        if self._is_resumable(uid):
+            self._resume(card, uid)
+        else:
+            self._start(card, uid)
 
-        # Three separate failure domains, on purpose. Choosing the outputs is
-        # best effort; playing the record is the contract. A HomePod that is
-        # still in OwnTone's list from a cached mDNS record but is powered off
-        # makes `/api/outputs/set` fail, and that must not be allowed to skip
-        # playback and leave a card sitting on the platter in silence.
-        #
-        # What we end up believing should be audible. None means we never
-        # managed to work it out, and there is then nothing to verify against.
-        intended: list[str] | None = None
-        with self._guarded(f"selecting outputs for {card.name}") as outputs_outcome:
-            intended = self._restore_outputs()
-        if not outputs_outcome.ok:
-            intended = None
-            with self._guarded("falling back to local outputs"):
-                local = self._owntone.local_output_ids()
-                self._set_outputs(local)
-                intended = local
+    def _start(self, card, uid: str) -> None:
+        """Put this record on from track 1. Caller holds the lock."""
+        intended = self._select_outputs(card)
 
         with self._guarded("forcing shuffle and repeat off"):
             self._owntone.set_vinyl_playback_mode()
@@ -187,17 +230,99 @@ class Controller:
         with self._guarded(f"starting {card.name}") as outcome:
             self._owntone.play_album(card.path)
         if not outcome.ok:
-            # Nothing is playing, so do not claim otherwise.
+            # Nothing is playing, so do not claim otherwise - and nothing is
+            # loaded either, so the next tap must not try to resume into
+            # whatever the failed call left behind.
             self._watch_outputs(None)
             self.state = State.IDLE
             self.now_playing = None
             self._last_uid = None
+            self._forget_loaded()
             return
 
         self._watch_outputs(intended)
         self._last_uid = uid
+        self._loaded_uid = uid
+        self._loaded_at = self._wall_clock()
+        self._next_playback_check = self._clock() + PLAYBACK_CHECK_INTERVAL_S
         self.now_playing = card.name
         self.state = State.PLAYING
+
+    def _resume(self, card, uid: str) -> None:
+        """Pick the needle back up where it was. Caller holds the lock.
+
+        The outputs are re-selected first because a release has very likely
+        happened since: the whole point of it is to hand the HomePods back, and
+        resuming into the local soundcard because nobody took them again would
+        be a quiet, baffling failure.
+        """
+        intended = self._select_outputs(card)
+
+        with self._guarded("forcing shuffle and repeat off"):
+            self._owntone.set_vinyl_playback_mode()
+
+        with self._guarded(f"resuming {card.name}") as outcome:
+            self._owntone.play()
+        if not outcome.ok:
+            # Stay as we are: the queue still holds the place, so a re-present
+            # can simply try again. Nothing is forgotten on a failed resume.
+            return
+
+        self._watch_outputs(intended)
+        self._last_uid = uid
+        self._next_playback_check = self._clock() + PLAYBACK_CHECK_INTERVAL_S
+        self.now_playing = card.name
+        self.state = State.PLAYING
+
+    def _select_outputs(self, card) -> list[str] | None:
+        """Choose where this record should be audible. Caller holds the lock.
+
+        Three separate failure domains, on purpose. Choosing the outputs is
+        best effort; playing the record is the contract. A HomePod that is
+        still in OwnTone's list from a cached mDNS record but is powered off
+        makes `/api/outputs/set` fail, and that must not be allowed to skip
+        playback and leave a card sitting on the platter in silence.
+
+        Returns what we end up believing should be audible. None means we never
+        managed to work it out, and there is then nothing to verify against.
+        """
+        intended: list[str] | None = None
+        with self._guarded(f"selecting outputs for {card.name}") as outcome:
+            intended = self._restore_outputs()
+        if outcome.ok:
+            return intended
+
+        intended = None
+        with self._guarded("falling back to local outputs"):
+            local = self._owntone.local_output_ids()
+            self._set_outputs(local)
+            intended = local
+        return intended
+
+    def start_over(self) -> str:
+        """Restart the loaded album from track 1, and return its name.
+
+        The admin page's one transport control, and it exists because this
+        design took the other one away: lifting a card used to be how you got
+        back to the start, and now it is how you pause. Nothing else can
+        rewind a record mid-side.
+
+        Raises LookupError when there is nothing on the platter, and
+        RuntimeError when OwnTone refused. Deliberately louder than the reader
+        paths, which contain everything: this one is called by a person who is
+        standing there waiting to be told whether it worked.
+        """
+        with self._lock:
+            uid = self._loaded_uid
+            card = self._cards.get(uid) if uid else None
+            if card is None:
+                raise LookupError(
+                    "Nothing is loaded to start over. Tap a card first.")
+            self._start(card, uid)
+            if self.state is not State.PLAYING:
+                raise RuntimeError(self.last_error
+                                   or f"Could not start {card.name} over")
+            return card.name
 
     def set_management_mode(self, enabled: bool) -> None:
         """Turn card-identification-only mode on or off.
@@ -215,6 +340,10 @@ class Controller:
                 self.state = State.IDLE
                 self.now_playing = None
                 self._last_uid = None
+                # The queue really is empty now, so there is no place left to
+                # hold: the first card tapped after management mode starts its
+                # album from track 1.
+                self._forget_loaded()
 
     def on_card_removed(self) -> None:
         with self._lock:
@@ -233,10 +362,12 @@ class Controller:
         self.state = State.PAUSED
 
     def tick(self) -> None:
-        """Called periodically; releases the outputs once grace expires, and
-        verifies that what we are playing to is what we asked for."""
+        """Called periodically; releases the outputs once grace expires,
+        verifies that what we are playing to is what we asked for, and notices
+        when the side has run out."""
         self._tick_grace()
         self._check_outputs()
+        self._check_finished()
 
     def _tick_grace(self) -> None:
         # The decision to release and the IDLE stamp that follows it must be
@@ -258,6 +389,11 @@ class Controller:
                 self._release()
             # Back to IDLE even on failure: the user is done with this record,
             # and retrying the release on every tick would only spam the log.
+            #
+            # `_loaded_uid` survives this on purpose. IDLE means "no speakers
+            # held, nothing audible", not "nothing on the platter" - the album
+            # and its position are still in OwnTone's queue, waiting for the
+            # same card to come back.
             self._watch_outputs(None)
             self.state = State.IDLE
             self.now_playing = None
@@ -423,13 +559,126 @@ class Controller:
             self._intended_outputs = None
             self._outputs_generation += 1
 
-    def _is_bump(self, uid: str) -> bool:
-        """A dropped read, not a deliberate lift — resume rather than restart."""
-        return (
-            self.state is State.PAUSED
-            and uid == self._last_uid
-            and self._clock() - self._paused_at <= self._config.bump_window_s
-        )
+    # --- is this record still on the platter? ------------------------------
+
+    def _forget_loaded(self) -> None:
+        """Nothing is in the queue any more. Caller holds the lock."""
+        self._loaded_uid = None
+        self._loaded_at = None
+
+    def _is_resumable(self, uid: str) -> bool:
+        """Should this card pick up where it left off, or start side one?
+
+        Three things have to hold, and each is its own kind of evidence:
+        it is the same record; a new day has not begun under it; and OwnTone
+        still actually has the queue. The last is asked of OwnTone rather than
+        remembered, because the position lives there and only there.
+
+        Caller holds the lock.
+        """
+        if uid != self._loaded_uid:
+            return False
+        if self._reset_hour_has_passed():
+            self._forget_loaded()
+            return False
+        if not self._queue_is_loaded():
+            self._forget_loaded()
+            return False
+        return True
+
+    def _reset_hour_has_passed(self) -> bool:
+        """Has the nightly reset fallen between loading the album and now?
+
+        The user's case: a record started at eleven and not finished. At ten
+        the next morning it should be side one again, not the back half of side
+        two. An hour of the day rather than a duration, because what is being
+        modelled is "a new day", and 3am is when nobody is listening.
+
+        Naive local time throughout. The reset is a matter of household
+        routine, not of instants, so the DST-ambiguous hour is worth exactly
+        nothing to defend against: the failure it could produce, once or twice
+        a year, is a resume that was offered an hour late or withdrawn an hour
+        early.
+
+        Caller holds the lock.
+        """
+        hour = self._config.resume_reset_hour
+        if hour is None or self._loaded_at is None:
+            return False
+        now = self._wall_clock()
+        boundary = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if boundary > now:
+            # Today's reset has not happened yet, so the one that matters is
+            # yesterday's. This is what keeps 23:00 -> 02:00 the same evening.
+            boundary -= datetime.timedelta(days=1)
+        return self._loaded_at < boundary
+
+    def _queue_is_loaded(self) -> bool:
+        """Does OwnTone still hold the album we think it does?
+
+        OwnTone can be restarted under a running jukebox, which empties the
+        queue while our memory of it survives; resuming then would be a
+        confident press of play into silence.
+
+        A failed check counts as "not loaded". The consequence is a restart
+        from track 1, which is audible and self-explanatory; the consequence of
+        guessing the other way is a silent box. Logged rather than written to
+        `last_error` for the same reason: nothing the operator needs to act on
+        has happened, and the status line is the one slot there is for things
+        that have.
+
+        Caller holds the lock.
+        """
+        try:
+            return self._owntone.queue_length() > 0
+        except Exception:  # see _guarded for why this is so broad
+            log.warning("Could not read the queue from OwnTone; starting the "
+                        "album from the beginning rather than risk silence",
+                        exc_info=True)
+            return False
+
+    def _check_finished(self) -> None:
+        """Notice that the side has run out, so the next tap starts side one.
+
+        Folded onto the output check's beat rather than given a rhythm of its
+        own: both are "ask OwnTone what is really going on" and neither is
+        urgent. It has to be noticed before the next card, not before the next
+        second.
+
+        Playback is deliberately not touched. The card may well still be on the
+        reader - the record has simply finished - and `state` is left alone so
+        that a re-announced card is still the no-op it always was, rather than
+        restarting the album the moment it ends, forever.
+        """
+        with self._lock:
+            if self.state is not State.PLAYING or self._loaded_uid is None:
+                return
+            now = self._clock()
+            if now < self._next_playback_check:
+                return
+            self._next_playback_check = now + PLAYBACK_CHECK_INTERVAL_S
+            loaded = self._loaded_uid
+
+        # Outside the lock, for the reasons _check_outputs sets out at length.
+        try:
+            state = str(self._owntone.player_state().get("state", ""))
+        except Exception as exc:  # see _guarded for why this is so broad
+            message = f"OwnTone error while checking playback: {exc}"
+            with self._lock:
+                self.last_error = message
+            log.warning(message, exc_info=True)
+            return
+
+        if state.casefold() != _FINISHED_STATE:
+            return
+
+        with self._lock:
+            # A card (or a release) landed while we were asking, so this answer
+            # is about a record that is no longer the one loaded.
+            if self._loaded_uid != loaded or self.state is not State.PLAYING:
+                return
+            log.info("Album finished; the next tap will start it from track 1")
+            self._forget_loaded()
 
     def _save_selection(self, selected: list[str]) -> None:
         """Persist the user's speaker choice, defending it against a drop.
@@ -466,9 +715,16 @@ class Controller:
         self._snapshot.save(selected)
 
     def _release(self) -> None:
+        """Hand the speakers back, and leave the record where it is.
+
+        This used to stop playback and clear the queue. It must not: the queue
+        *is* the position, and destroying it here is what made a lifted card
+        lose its place. The player is already paused (on_card_removed), so
+        deselecting the AirPlay outputs is enough to end the session and let
+        the HomePods go idle for other senders - which was always the part of
+        this that mattered.
+        """
         self._save_selection(self._owntone.selected_output_ids())
-        self._owntone.stop()
-        self._owntone.clear_queue()
         # Keep local selected, drop AirPlay so the HomePods go idle and are
         # free for other senders. Through _set_outputs, because this is the
         # selection the next card will find and must recognise as our own.

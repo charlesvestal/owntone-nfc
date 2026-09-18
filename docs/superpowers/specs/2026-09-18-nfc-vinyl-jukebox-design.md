@@ -532,3 +532,53 @@ same change did nothing for the OS 27 devices, whose failure looked identical.
 A real fix for one class of device masked a completely different cause in
 another. The upstream reporter hit the same false positive four times over two
 weeks.
+
+## Resume reverses "always from the beginning" (2026-09-18)
+
+The state machine above says a card returning after the bump window restarts
+from track 1, and that the grace expiry stops playback and clears the queue.
+Both are now wrong, and the owner reversed the decision himself:
+
+> "shouldn't a pick up and put down resume if done within X time? honestly it
+> should be within like an hour or something. what if you just want to pause?
+> that's the vinyl way. in fact, should we just keep the state until another
+> album is played?"
+
+He is right, and the original rule was made before the box existed. **Lifting a
+card is how you pause a record player**, and the north star above - "no resume"
+- confused the physical honesty of the object (no hidden state on the card, no
+skip button) with punishing the user for taking the record off. A real turntable
+does not restart the side when you lift the tonearm.
+
+**The model is now: the record stays on the platter until a different one is
+put on.**
+
+- Same card back → resumes, however long it has been.
+- Different card → clears the queue and starts that album from track 1.
+- Album reaches its natural end → the place is forgotten; the next tap is fresh.
+- `resume_reset_hour` (default 3am, `null` to disable) draws a line under the
+  day, so an album abandoned at midnight is side one again in the morning.
+- A **Start over** button on the admin page is the only way to rewind mid-side.
+  This is the one transport control the page carries, and it exists precisely
+  because pause-on-lift took the old one (lift and replace) away.
+
+Consequences worth recording:
+
+- **The grace expiry no longer stops or clears.** It deselects the AirPlay
+  outputs and nothing else. Releasing the speakers was always the requirement -
+  the HomePods must go idle for other senders - and the stop-and-clear was
+  incidental to it. Keeping the queue is what preserves the position.
+- **A resume has to re-select the outputs**, since the release handed them
+  back. Resume is therefore output-selection plus `play`, not `play` alone.
+- **`bump_window_s` is gone.** Measured at 35ms and set to 0.25s in Spike 2, it
+  existed only to tell a dropped read from a deliberate lift. Both resume now,
+  so it had nothing left to decide. Unknown config keys are ignored, so boxes in
+  the field are unaffected.
+- **The position is not persisted, deliberately.** It lives in OwnTone's queue,
+  which a restart of OwnTone or of the Pi empties; a persisted memory of a
+  position that no longer exists would only produce a confident resume into
+  silence. The controller therefore asks OwnTone whether the queue is still
+  there before resuming, and falls back to starting the album.
+- **Two clocks.** Everything durational stays on the monotonic clock. The
+  nightly reset is the one wall-clock question in the system, and takes a
+  separate injected time source rather than replacing the existing one.
