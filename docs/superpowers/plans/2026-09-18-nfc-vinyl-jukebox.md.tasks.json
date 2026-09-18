@@ -64,7 +64,7 @@
     {
       "id": 7,
       "subject": "Task 7: Project scaffolding and configuration",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** An installable Python package with pytest wired up and a typed config object.\n\n**Files:**\n- Create: `pyproject.toml`\n- Create: `src/nfc_jukebox/__init__.py`\n- Create: `src/nfc_jukebox/config.py`\n- Create: `tests/__init__.py` (empty \u2014 makes `tests` importable, required by Task 14)\n- Create: `tests/test_config.py`\n\n**Acceptance Criteria:**\n- [ ] `pytest` runs and collects tests\n- [ ] `Config.load()` reads a YAML file and returns typed values\n- [ ] Missing config file yields documented defaults rather than an exception\n\n**Verify:** `pytest tests/test_config.py -v` \u2192 3 passed\n\n```json:metadata\n{\"files\": [\"pyproject.toml\", \"src/nfc_jukebox/__init__.py\", \"src/nfc_jukebox/config.py\", \"tests/__init__.py\", \"tests\", \"tests/test_config.py\"], \"verifyCommand\": \"pytest tests/test_config.py -v\", \"acceptanceCriteria\": [\"`pytest` runs and collects tests\", \"`Config.load()` reads a YAML file and returns typed values\", \"Missing config file yields documented defaults rather than an exception\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         4,
@@ -75,7 +75,7 @@
     {
       "id": 8,
       "subject": "Task 8: OwnTone REST client",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** A thin, fully tested client for the OwnTone endpoints this project uses.\n\n**Files:**\n- Create: `src/nfc_jukebox/owntone.py`\n- Create: `tests/test_owntone.py`\n\n**Acceptance Criteria:**\n- [ ] `play_album(relpath)` clears the queue and starts playback in one call\n- [ ] `selected_output_ids()` returns only outputs with `selected: true`\n- [ ] `set_outputs(ids)` PUTs the expected body to `/api/outputs/set`\n- [ ] `airplay_output_ids()` and `local_output_ids()` partition outputs by type\n- [ ] Every method is tested against a mocked HTTP layer \u2014 no live server needed\n\n**Verify:** `pytest tests/test_owntone.py -v` \u2192 7 passed\n\n```json:metadata\n{\"files\": [\"src/nfc_jukebox/owntone.py\", \"tests/test_owntone.py\"], \"verifyCommand\": \"pytest tests/test_owntone.py -v\", \"acceptanceCriteria\": [\"`play_album(relpath)` clears the queue and starts playback in one call\", \"`selected_output_ids()` returns only outputs with `selected: true`\", \"`set_outputs(ids)` PUTs the expected body to `/api/outputs/set`\", \"`airplay_output_ids()` and `local_output_ids()` partition outputs by type\", \"Every method is tested against a mocked HTTP layer \\u2014 no live server needed\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         7
@@ -84,7 +84,7 @@
     {
       "id": 9,
       "subject": "Task 9: Card mapping store",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Load and save `cards.yaml`, with UID normalisation so readers that format UIDs differently still match.\n\n**Files:**\n- Create: `src/nfc_jukebox/cards.py`\n- Create: `tests/test_cards.py`\n\n**Acceptance Criteria:**\n- [ ] UIDs normalise to lowercase hex with separators stripped\n- [ ] `load()` on a missing file returns an empty mapping, not an error\n- [ ] `save()` then `load()` round-trips cleanly\n- [ ] Stored paths are library-root-relative, so they survive a rebuild\n\n**Verify:** `pytest tests/test_cards.py -v` \u2192 5 passed\n\n```json:metadata\n{\"files\": [\"src/nfc_jukebox/cards.py\", \"tests/test_cards.py\"], \"verifyCommand\": \"pytest tests/test_cards.py -v\", \"acceptanceCriteria\": [\"UIDs normalise to lowercase hex with separators stripped\", \"`load()` on a missing file returns an empty mapping, not an error\", \"`save()` then `load()` round-trips cleanly\", \"Stored paths are library-root-relative, so they survive a rebuild\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         8
@@ -93,7 +93,7 @@
     {
       "id": 10,
       "subject": "Task 10: Output snapshot persistence",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Persist the selected-output list to disk so the speaker choice survives both a release cycle and a reboot.\n\n**Files:**\n- Create: `src/nfc_jukebox/outputs.py`\n- Create: `tests/test_outputs.py`\n\n**Acceptance Criteria:**\n- [ ] `save()` then `load()` round-trips a list of output IDs\n- [ ] `load()` on a missing file returns an empty list\n- [ ] `load()` on a corrupt file returns an empty list rather than raising\n- [ ] Writes are atomic, so a power cut cannot leave a half-written file\n\n**Verify:** `pytest tests/test_outputs.py -v` \u2192 4 passed\n\n```json:metadata\n{\"files\": [\"src/nfc_jukebox/outputs.py\", \"tests/test_outputs.py\"], \"verifyCommand\": \"pytest tests/test_outputs.py -v\", \"acceptanceCriteria\": [\"`save()` then `load()` round-trips a list of output IDs\", \"`load()` on a missing file returns an empty list\", \"`load()` on a corrupt file returns an empty list rather than raising\", \"Writes are atomic, so a power cut cannot leave a half-written file\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         9
@@ -102,7 +102,7 @@
     {
       "id": 11,
       "subject": "Task 11: Card reader",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** A reader abstraction emitting `card_present(uid)` / `card_removed()`, with a real nfcpy implementation and a fake for tests.\n\n**Files:**\n- Create: `src/nfc_jukebox/reader.py`\n- Create: `tests/test_reader.py`\n\n**Acceptance Criteria:**\n- [ ] `FakeReader` lets tests drive presence events synchronously\n- [ ] `Pn532Reader` emits normalised lowercase-hex UIDs\n- [ ] Reader errors are logged and retried rather than killing the process\n\n**Verify:** `pytest tests/test_reader.py -v` \u2192 3 passed\n\n```json:metadata\n{\"files\": [\"src/nfc_jukebox/reader.py\", \"tests/test_reader.py\"], \"verifyCommand\": \"pytest tests/test_reader.py -v\", \"acceptanceCriteria\": [\"`FakeReader` lets tests drive presence events synchronously\", \"`Pn532Reader` emits normalised lowercase-hex UIDs\", \"Reader errors are logged and retried rather than killing the process\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         10
@@ -111,7 +111,7 @@
     {
       "id": 12,
       "subject": "Task 12: The vinyl state machine",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Implement the controller that turns card events into OwnTone calls, with the full vinyl semantics.\n\n**Files:**\n- Create: `src/nfc_jukebox/controller.py`\n- Create: `tests/test_controller.py`\n\n**Acceptance Criteria:**\n- [ ] Card placed \u2192 queue cleared, album added, playback starts at track 1\n- [ ] Card removed \u2192 pause is immediate\n- [ ] Same card within the bump window \u2192 resumes in place, no restart\n- [ ] Same card after the bump window \u2192 restarts from track 1\n- [ ] Different card mid-playback \u2192 switches immediately\n- [ ] Grace expiry \u2192 stop, queue cleared, AirPlay outputs deselected\n- [ ] Output snapshot restored on the next card\n- [ ] AirPlay output selected by hand while idle \u2192 snapshot does not clobber it\n- [ ] Saved output no longer present \u2192 falls back to local, error surfaced, playback continues\n- [ ] Unknown card \u2192 ignored with an error recorded, playback unaffected\n- [ ] Every scanned UID is recorded, registered or not, so learn mode can read it\n\n**Verify:** `pytest tests/test_controller.py -v` \u2192 11 passed\n\n```json:metadata\n{\"files\": [\"src/nfc_jukebox/controller.py\", \"tests/test_controller.py\"], \"verifyCommand\": \"pytest tests/test_controller.py -v\", \"acceptanceCriteria\": [\"Card placed \\u2192 queue cleared, album added, playback starts at track 1\", \"Card removed \\u2192 pause is immediate\", \"Same card within the bump window \\u2192 resumes in place, no restart\", \"Same card after the bump window \\u2192 restarts from track 1\", \"Different card mid-playback \\u2192 switches immediately\", \"Grace expiry \\u2192 stop, queue cleared, AirPlay outputs deselected\", \"Output snapshot restored on the next card\", \"AirPlay output selected by hand while idle \\u2192 snapshot does not clobber it\", \"Saved output no longer present \\u2192 falls back to local, error surfaced, playback continues\", \"Unknown card \\u2192 ignored with an error recorded, playback unaffected\", \"Every scanned UID is recorded, registered or not, so learn mode can read it\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         11
@@ -120,19 +120,19 @@
     {
       "id": 13,
       "subject": "Task 13: Entrypoint and systemd service",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The service runs on boot, wires reader to controller, and ticks the grace timer.\n\n**Files:**\n- Create: `src/nfc_jukebox/__main__.py`\n- Create: `deploy/nfc-jukebox.service`\n- Create: `deploy/config.yaml.example`\n\n**Acceptance Criteria:**\n- [ ] `systemctl is-active nfc-jukebox` returns `active` after boot\n- [ ] The service waits for OwnTone before starting\n- [ ] Reader events appear in `journalctl -u nfc-jukebox`\n- [ ] The service restarts automatically if it crashes\n\n**Verify:** `ssh jukebox.local 'systemctl is-active nfc-jukebox && journalctl -u nfc-jukebox -n 20 --no-pager'` \u2192 `active`, log shows \"Reader open\"\n\n```json:metadata\n{\"files\": [\"src/nfc_jukebox/__main__.py\", \"deploy/nfc-jukebox.service\", \"deploy/config.yaml.example\"], \"verifyCommand\": \"ssh jukebox.local 'systemctl is-active nfc-jukebox && journalctl -u nfc-jukebox -n 20 --no-pager'\", \"acceptanceCriteria\": [\"`systemctl is-active nfc-jukebox` returns `active` after boot\", \"The service waits for OwnTone before starting\", \"Reader events appear in `journalctl -u nfc-jukebox`\", \"The service restarts automatically if it crashes\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
-        12
+        14
       ]
     },
     {
       "id": 14,
       "subject": "Task 14: Web admin \u2014 card registration",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** A minimal page for registering cards and seeing status. Nothing player-related.\n\n**Files:**\n- Create: `src/nfc_jukebox/web.py`\n- Create: `src/nfc_jukebox/templates/index.html`\n- Create: `tests/test_web.py`\n\n**Acceptance Criteria:**\n- [ ] `GET /api/status` returns state, now playing, last error, and last scanned UID\n- [ ] `GET /api/albums` lists album directories relative to the library root\n- [ ] `POST /api/cards` saves a mapping and it survives a restart\n- [ ] `DELETE /api/cards/<uid>` removes a mapping\n- [ ] Tapping an unregistered card makes its UID appear in learn mode within 2 seconds\n\n**Verify:** `pytest tests/test_web.py -v` \u2192 5 passed\n\n```json:metadata\n{\"files\": [\"src/nfc_jukebox/web.py\", \"src/nfc_jukebox/templates/index.html\", \"tests/test_web.py\"], \"verifyCommand\": \"pytest tests/test_web.py -v\", \"acceptanceCriteria\": [\"`GET /api/status` returns state, now playing, last error, and last scanned UID\", \"`GET /api/albums` lists album directories relative to the library root\", \"`POST /api/cards` saves a mapping and it survives a restart\", \"`DELETE /api/cards/<uid>` removes a mapping\", \"Tapping an unregistered card makes its UID appear in learn mode within 2 seconds\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
-        13
+        12
       ]
     },
     {
@@ -141,7 +141,7 @@
       "status": "pending",
       "description": "**Goal:** One script takes a fresh Bookworm Pi to a working jukebox, and moving to a larger card never requires re-registering cards.\n\n**Files:**\n- Create: `deploy/provision.sh`\n- Create: `deploy/backup.sh`\n- Modify: `docs/runbook.md`\n\n**Acceptance Criteria:**\n- [ ] `provision.sh` runs on a fresh Bookworm Lite install and ends with both services active\n- [ ] `backup.sh` produces a single archive containing `cards.yaml` and `config.yaml`\n- [ ] Restoring that archive onto a fresh build makes every existing card work again with no re-registration\n- [ ] The script is idempotent \u2014 running it twice is harmless\n\n**Verify:** `ssh jukebox.local 'sudo bash /home/pi/owntone-nfc/deploy/provision.sh && systemctl is-active owntone nfc-jukebox'` \u2192 `active` twice\n\n```json:metadata\n{\"files\": [\"deploy/provision.sh\", \"deploy/backup.sh\", \"docs/runbook.md\"], \"verifyCommand\": \"ssh jukebox.local 'sudo bash /home/pi/owntone-nfc/deploy/provision.sh && systemctl is-active owntone nfc-jukebox'\", \"acceptanceCriteria\": [\"`provision.sh` runs on a fresh Bookworm Lite install and ends with both services active\", \"`backup.sh` produces a single archive containing `cards.yaml` and `config.yaml`\", \"Restoring that archive onto a fresh build makes every existing card work again with no re-registration\", \"The script is idempotent \\u2014 running it twice is harmless\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
-        14
+        13
       ]
     },
     {
@@ -172,5 +172,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-18T10:58:43.657944"
+  "lastUpdated": "2026-09-18T11:10:05.635712"
 }
