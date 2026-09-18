@@ -174,7 +174,8 @@ def test_snapshot_restored_on_next_card(ctx):
 
 
 def test_manual_airplay_selection_while_idle_is_not_clobbered(ctx):
-    controller, owntone, snapshot, _ = ctx
+    controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)  # we last selected local
     snapshot.save(["1"])
     owntone.outputs[1]["selected"] = True  # user picked AirPlay by hand
     controller.on_card_present("aaaa")
@@ -186,8 +187,10 @@ def test_manual_airplay_selection_while_idle_is_not_clobbered(ctx):
 
 
 def test_manual_chromecast_selection_while_idle_is_not_clobbered(ctx):
-    """Neither local nor AirPlay is still a deliberate choice."""
-    controller, owntone, snapshot, _ = ctx
+    """A choice that is neither local nor AirPlay needs no special case: it
+    differs from what we last selected, which is the whole test."""
+    controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)
     owntone.outputs.append({"id": "7", "type": "Chromecast", "selected": True})
     owntone.outputs[0]["selected"] = False
     snapshot.save(["1"])
@@ -196,7 +199,10 @@ def test_manual_chromecast_selection_while_idle_is_not_clobbered(ctx):
 
 
 def test_missing_saved_output_falls_back_to_local(ctx):
-    controller, owntone, snapshot, _ = ctx
+    controller, owntone, snapshot, clock = ctx
+    # Past the first cycle, so the local-only selection is known to be ours
+    # and the snapshot is what we act on. See _prime.
+    _prime(controller, owntone, snapshot, clock)
     snapshot.save(["99"])  # HomePod no longer on the network
     controller.on_card_present("aaaa")
     # The fallback must be an actual write of the local outputs, not merely the
@@ -464,6 +470,10 @@ def test_release_failure_does_not_escape(ctx):
 def _start_with_both_outputs(ctx):
     """Start an album with local + AirPlay selected, as the snapshot asks."""
     controller, owntone, snapshot, clock = ctx
+    # The snapshot is only acted on once we have a record of what we last
+    # selected ourselves; the first card after a start deliberately leaves the
+    # selection alone. See _prime.
+    _prime(controller, owntone, snapshot, clock)
     snapshot.save(["1", "2"])
     controller.on_card_present("aaaa")
     assert owntone.selected_output_ids() == ["1", "2"]
@@ -616,9 +626,10 @@ def test_a_failed_output_check_does_not_escape(ctx):
 
 
 def test_a_hand_picked_output_is_watched_too(ctx):
-    """The guard rail means we never wrote a selection; the thing the user
+    """Adopting the user's selection means we never wrote one; the thing they
     chose by hand is still what we intend to be hearing."""
     controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)
     snapshot.save(["1"])
     owntone.outputs[1]["selected"] = True  # user picked the HomePod while idle
     controller.on_card_present("aaaa")
@@ -717,3 +728,148 @@ def test_leaving_management_mode_restores_normal_playback(ctx):
     controller.on_card_present("aaaa")
     assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
     assert controller.state is State.PLAYING
+
+
+# --- who changed the selection? --------------------------------------------
+#
+# The user picks speakers in OwnTone's own web UI; the jukebox does not
+# duplicate that control. All it has to do is tell "the user changed this" from
+# "this is the state we ourselves left behind at the last release", so that a
+# deliberate choice is never overridden -- in either direction.
+
+
+def _prime(controller, owntone, snapshot, clock):
+    """Run one full card cycle so the controller has a record of what it set.
+
+    Fresh out of the box it has none, and then deliberately leaves the
+    selection alone (see test_first_card_after_a_restart_leaves_the_selection
+    _alone). Tests about the steady state need to be past that first cycle.
+    The empty snapshot keeps the cycle itself from tripping the shrink policy.
+    """
+    snapshot.value = []
+    controller.on_card_present("aaaa")
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    owntone.calls.clear()
+    controller.last_error = None
+
+
+def test_first_card_after_a_restart_leaves_the_selection_alone(ctx):
+    """No record of what we set means no way to know whether what OwnTone
+    reports is ours or the user's -- and OwnTone's own persisted selection is
+    not authoritative (it is only written on a clean shutdown). The safe
+    default is not to move the audio anywhere the user did not ask for."""
+    controller, owntone, snapshot, _ = ctx
+    snapshot.save(["2"])  # a HomePod choice that survived the reboot
+
+    controller.on_card_present("aaaa")
+
+    assert not any(c[0] == "set_outputs" for c in owntone.calls)
+    assert owntone.selected_output_ids() == ["1"]
+    assert controller.state is State.PLAYING
+    # ...and the snapshot is *not* adopted from a selection we cannot vouch
+    # for: the saved choice must survive the reboot it was persisted for.
+    assert snapshot.load() == ["2"]
+
+
+def test_user_switching_to_local_while_idle_is_not_clobbered(ctx):
+    """The reported bug. The snapshot holds a HomePod; the user goes to
+    OwnTone's UI while nothing is playing and picks the local output because
+    they want headphones. The next card must not fling the sound back onto the
+    HomePod."""
+    controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)
+    snapshot.save(["2"])
+    controller.on_card_present("aaaa")
+    assert owntone.selected_output_ids() == ["2"]
+    controller.on_card_removed()  # record off the platter, nothing playing
+    owntone.set_outputs(["1"])    # user picks local in OwnTone's web UI
+    owntone.calls.clear()
+
+    controller.on_card_present("bbbb")
+
+    assert not any(c[0] == "set_outputs" for c in owntone.calls)
+    assert owntone.selected_output_ids() == ["1"]
+    # The new choice becomes the thing we remember for the release cycle.
+    assert snapshot.load() == ["1"]
+
+
+def test_user_switching_to_airplay_while_idle_is_still_respected(ctx):
+    """The mirror of the case above, and the one the old guard rail already
+    got right. It must keep working."""
+    controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)
+    snapshot.save(["1"])
+    owntone.set_outputs(["1", "2"])  # user adds the HomePod by hand
+    owntone.calls.clear()
+
+    controller.on_card_present("aaaa")
+
+    assert not any(c[0] == "set_outputs" for c in owntone.calls)
+    assert owntone.selected_output_ids() == ["1", "2"]
+    assert snapshot.load() == ["1", "2"]
+
+
+def test_an_untouched_selection_is_restored_from_the_snapshot(ctx):
+    """Nobody has been at the web UI since we selected local at release, so
+    the saved choice is still the user's most recent word on the subject."""
+    controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)
+    snapshot.save(["1", "2"])
+
+    controller.on_card_present("aaaa")
+
+    assert ("set_outputs", ("1", "2")) in owntone.calls
+    assert owntone.selected_output_ids() == ["1", "2"]
+
+
+def test_the_local_fallback_at_card_start_counts_as_ours(ctx):
+    """We set the outputs in two places, and both must update the record: a
+    fallback that is not remembered looks like a user edit on the next card,
+    and the snapshot would never be restored again."""
+    controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)
+    snapshot.save(["1", "2"])
+    real = owntone.set_outputs
+    owntone.set_outputs = _boom
+    controller.on_card_present("aaaa")  # restore fails; falls back to local
+    owntone.set_outputs = real
+    owntone.set_outputs(["1"])          # the fallback that did not land
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    controller.last_error = None
+    owntone.calls.clear()
+
+    controller.on_card_present("aaaa")
+
+    assert ("set_outputs", ("1", "2")) in owntone.calls
+
+
+def test_a_dropped_speaker_is_not_mistaken_for_a_deliberate_change(ctx):
+    """A HomePod that deselects itself mid-album is a fault, not a choice. The
+    next card must re-select it rather than treat local-only as the user's new
+    intent -- and the snapshot must survive."""
+    controller, owntone, snapshot, clock = ctx
+    _prime(controller, owntone, snapshot, clock)
+    snapshot.save(["1", "2"])
+    controller.on_card_present("aaaa")
+    assert owntone.selected_output_ids() == ["1", "2"]
+
+    owntone.outputs[1]["selected"] = False  # pairing refused, seconds later
+    clock.advance(30.0)
+    controller.tick()
+    assert controller.last_error is not None  # reported, once
+    controller.last_error = None
+
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()
+    assert snapshot.load() == ["1", "2"]  # the shrink policy holds the line
+    controller.last_error = None
+
+    controller.on_card_present("bbbb")
+
+    assert owntone.selected_output_ids() == ["1", "2"]
+    assert snapshot.load() == ["1", "2"]
