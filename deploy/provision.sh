@@ -72,6 +72,13 @@ say "Boot: wait for a network, not for every interface"
 install -d /etc/systemd/system/NetworkManager-wait-online.service.d
 install -m 0644 "$REPO/deploy/dropins/NetworkManager-wait-online-any.conf" \
     /etc/systemd/system/NetworkManager-wait-online.service.d/any.conf
+
+# OwnTone waits for the library rather than trusting boot ordering. See the
+# drop-in: network-online.target is reached before the radio has an address,
+# and a single missed mount leaves a box with a library and no music server.
+install -d /etc/systemd/system/owntone.service.d
+install -m 0644 "$REPO/deploy/dropins/owntone-wait-for-music.conf" \
+    /etc/systemd/system/owntone.service.d/mount.conf
 systemctl daemon-reload
 
 say "OwnTone"
