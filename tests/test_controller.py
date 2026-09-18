@@ -128,8 +128,8 @@ def test_same_card_within_bump_window_resumes(ctx):
     clock.advance(0.2)
     controller.on_card_present("aaaa")
     assert owntone.calls[-1] == ("play",)
-    assert ("play_album", "Miles Davis/Kind of Blue") == owntone.calls[0][:2]
-    assert sum(1 for c in owntone.calls if c[0] == "play_album") == 1
+    album_calls = [c for c in owntone.calls if c[0] == "play_album"]
+    assert album_calls == [("play_album", "Miles Davis/Kind of Blue")]
 
 
 def test_same_card_after_bump_window_restarts(ctx):
