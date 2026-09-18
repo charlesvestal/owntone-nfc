@@ -92,6 +92,43 @@ unauthenticated `/info` probe even over loopback.
 | Speaker drops mid-album, status shows an error | AirPlay receiver refused pairing; OwnTone fell back to local | Check Apple Home access setting. The error names which output was lost. |
 | Admin page shows no cards | Page-level failure, not data loss | Check `curl localhost:8080/api/cards` first — the registry is almost certainly intact. |
 
+## Music on the NAS
+
+The library is an SMB mount from the UGREEN NAS, mounted read-only at
+`/srv/music` so the jukebox can never damage it.
+
+```
+//vestnas.local/Media/music/library /srv/music cifs \
+  credentials=/etc/samba/creds/nas,uid=pi,gid=pi,file_mode=0444,dir_mode=0555,\
+  iocharset=utf8,ro,nofail,_netdev,x-systemd.automount,x-systemd.idle-timeout=600 0 0
+```
+
+Credentials live in `/etc/samba/creds/nas` (`0600`, root). Recreate with
+`sudo /usr/local/sbin/nas-creds charlesvestal`, which prompts rather than
+taking the password as an argument.
+
+Three details that matter:
+
+- **`x-systemd.automount` + `RequiresMountsFor=/srv/music`** on `owntone.service`.
+  If OwnTone starts before the mount exists, the music stays unavailable *even
+  after it mounts later* - only a full rescan recovers (upstream issue #690).
+- **`nofail`** so a NAS that is off or asleep cannot stop the Pi booting.
+- **Nightly rescan** via `/etc/cron.d/owntone-rescan`. Network mounts send no
+  inotify events, so OwnTone never notices new albums on its own. The mount is
+  read-only so OwnTone's `.init-rescan` trigger file is not an option; the cron
+  calls `PUT /api/update` instead. Trigger one by hand from OwnTone's web UI or
+  `curl -X PUT localhost:3689/api/update`.
+
+The initial bulk scan of ~2,000 files took **520 seconds** over SMB on Wi-Fi.
+That is a one-time cost; incremental scans are much faster.
+
+**Card mappings were unaffected by the move from SD to NAS** - all seven
+resolved with correct track counts immediately, because they store
+library-relative paths. The NAS uses the same `<Artist>/<Album>/` layout.
+
+The previous local copy is at `/srv/music.local`. Delete it to reclaim SD
+space once you are happy with the NAS.
+
 ## Rebuilding onto a new SD card
 
 1. `sudo bash deploy/backup.sh` on the old card; copy the archive off.
