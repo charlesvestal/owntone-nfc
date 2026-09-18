@@ -198,3 +198,28 @@ def test_index_renders(app_ctx):
     assert "innerHTML" not in body.replace(
         "// Everything below builds nodes and sets textContent rather than "
         "innerHTML:", "")
+
+
+def test_every_element_the_page_scripts_reference_actually_exists():
+    """Guards against half-applied template edits.
+
+    A change once added `getElementById('known')` to the script without adding
+    the matching element, so refresh() threw on its first run and the card
+    table never rendered - which looked exactly like "all my registrations
+    disappeared". Nothing caught it: no test renders the page, let alone runs
+    its JavaScript.
+
+    This is not a substitute for executing the page, but it makes the specific
+    silent failure - script and markup drifting apart - impossible to ship.
+    """
+    import re
+    from pathlib import Path
+
+    import nfc_jukebox
+
+    html = (Path(nfc_jukebox.__file__).parent / "templates" / "index.html").read_text()
+    referenced = set(re.findall(r"getElementById\(\s*['\"]([^'\"]+)['\"]\s*\)", html))
+    assert referenced, "expected the page to reference some elements by id"
+    defined = set(re.findall(r"""\bid=["']([^"']+)["']""", html))
+    missing = sorted(referenced - defined)
+    assert not missing, f"script references ids with no matching element: {missing}"

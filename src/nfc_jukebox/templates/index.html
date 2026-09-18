@@ -11,11 +11,12 @@
 <h1>Jukebox</h1>
 <p id="status" class="muted">…</p>
 <p class="muted">Player controls, volume and speakers live in
-  <a href="{{ owntone_url }}">OwnTone</a>.</p>
+  <a id="owntone" href="#">OwnTone</a>.</p>
 
 <h2>Register a card</h2>
 <p>Tap a card on the reader. Its ID appears here.</p>
 <p id="uid">—</p>
+<p id="known" class="muted">&nbsp;</p>
 <label>Album <select id="album" onchange="syncName()"></select></label>
 <label>Name <input id="name" placeholder="(optional)"></label>
 <button id="save">Save</button>
@@ -28,6 +29,15 @@
 // Tracks which card the dropdown was last auto-pointed at, so a selection the
 // user is actively making is not yanked away on the next one-second poll.
 let lastShownUid = null;
+
+// OwnTone runs on the same host as this page. Built from location.hostname
+// rather than the server's own config, which points at 127.0.0.1 - correct
+// for the service, but as a link it would aim the browser at the viewer's
+// own machine.
+(function () {
+  const a = document.getElementById('owntone');
+  if (a) a.href = location.protocol + '//' + location.hostname + ':{{ owntone_port }}';
+})();
 // Everything below builds nodes and sets textContent rather than innerHTML:
 // album folder names and card labels are arbitrary user text, and one folder
 // named with an <img onerror=...> would otherwise run script on this page.
@@ -56,7 +66,7 @@ async function refresh() {
   // Say plainly whether this card is already assigned. Without this the page
   // shows a bare UID beside whatever album was last selected, which looks
   // like the card's current mapping.
-  const known = document.getElementById('known');
+  const known = document.getElementById('known') || {};
   if (!s.last_seen_uid) {
     known.textContent = '\u00a0';
   } else if (s.last_seen_known) {
@@ -74,9 +84,25 @@ async function refresh() {
   }
   lastShownUid = s.last_seen_uid;
 
+  // Only ever replace the table with a list we actually got. A failed or
+  // malformed fetch - a service restart mid-poll, say - must leave the last
+  // known registry on screen rather than blanking it, because an empty table
+  // here reads as "my registrations are gone".
   const c = await (await fetch('/api/cards')).json();
-  const tbody = document.getElementById('cards');
-  tbody.replaceChildren(...c.cards.map(cardRow));
+  if (Array.isArray(c.cards)) {
+    document.getElementById('cards').replaceChildren(...c.cards.map(cardRow));
+  }
+}
+
+// refresh() runs once a second forever; an unhandled rejection would stop
+// reporting errors silently. Surface it on the status line and carry on.
+async function tick() {
+  try {
+    await refresh();
+  } catch (e) {
+    const st = document.getElementById('status');
+    if (st) st.textContent = 'admin page cannot reach the jukebox \u2014 retrying\u2026';
+  }
 }
 // The album path already names the record, so the name box is a convenience
 // for friendly labels, not required entry. Mirror the album into it so it is
@@ -118,5 +144,5 @@ async function del(uid) {
   refresh();
 }
 document.getElementById('save').addEventListener('click', save);
-loadAlbums(); refresh(); setInterval(refresh, 1000);
+loadAlbums(); tick(); setInterval(tick, 1000);
 </script>
