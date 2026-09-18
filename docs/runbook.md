@@ -176,10 +176,24 @@ The library is an SMB mount from the UGREEN NAS, mounted read-only at
 `/srv/music` so the jukebox can never damage it.
 
 ```
-//vestnas.local/Media/music/library /srv/music cifs \
+//192.168.2.46/Media/music/library /srv/music cifs \
   credentials=/etc/samba/creds/nas,uid=pi,gid=pi,file_mode=0444,dir_mode=0555,\
   iocharset=utf8,ro,nofail,_netdev,x-systemd.automount,x-systemd.idle-timeout=600 0 0
 ```
+
+**By IP, deliberately, not `//vestnas.local/`.** The hostname version worked
+for weeks and then stopped: the NAS began advertising only an IPv6 address
+over mDNS, and the Pi resolves with `mdns4_minimal`, which is IPv4-only. The
+mount failed at boot with `could not resolve address for vestnas.local`, and
+because both services required the mount, the box went completely silent -
+no music and no admin page to say why.
+
+Pinning the name in `/etc/hosts` is **not** a fix. `/etc/hosts` here is
+managed by cloud-init and rewritten on every boot, so that repair survives
+until the next restart and then fails exactly as before.
+
+The cost of an IP is that it must not move: give the NAS a static address, or
+a DHCP reservation on the router.
 
 Credentials live in `/etc/samba/creds/nas` (`0600`, root). Recreate with
 `sudo /usr/local/sbin/nas-creds charlesvestal`, which prompts rather than
@@ -187,9 +201,13 @@ taking the password as an argument.
 
 Three details that matter:
 
-- **`x-systemd.automount` + `RequiresMountsFor=/srv/music`** on `owntone.service`.
-  If OwnTone starts before the mount exists, the music stays unavailable *even
-  after it mounts later* - only a full rescan recovers (upstream issue #690).
+- **`x-systemd.automount` + `RequiresMountsFor=/srv/music`** on `owntone.service`
+  only. If OwnTone starts before the mount exists, the music stays unavailable
+  *even after it mounts later* - only a full rescan recovers (upstream issue
+  #690). `nfc-jukebox.service` deliberately does **not** require the mount: it
+  starts regardless, and `/api/status` reports `library_ok: false` with the
+  reason, so a missing NAS produces a page that explains itself instead of a
+  box that looks dead.
 - **`nofail`** so a NAS that is off or asleep cannot stop the Pi booting.
 - **Nightly rescan** via `/etc/cron.d/owntone-rescan`. Network mounts send no
   inotify events, so OwnTone never notices new albums on its own. The mount is
