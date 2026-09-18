@@ -55,6 +55,25 @@ grep -q '^\[music\]' /etc/samba/smb.conf || cat >> /etc/samba/smb.conf <<EOF
 EOF
 systemctl restart smbd
 
+# nmbd is NetBIOS name resolution for old Windows clients. Nothing here needs
+# it -- macOS and Linux find SMB shares over mDNS -- and it starts before the
+# Wi-Fi has an address, then spends 90 seconds failing with "No local IPv4
+# non-loopback interfaces available" before systemd kills it. That is 90
+# seconds of every boot bought for nothing. smbd, the actual file server, is
+# untouched.
+systemctl disable --now nmbd 2>/dev/null || true
+
+say "Boot: wait for a network, not for every interface"
+# NetworkManager-wait-online waits for *all* managed interfaces by default, so
+# with a connection profile for ethernet that is normally unplugged it sits
+# through the full 60s timeout on every boot -- and that wait is most of the
+# time between power-on and being able to play a record. --any returns as soon
+# as one interface has an address.
+install -d /etc/systemd/system/NetworkManager-wait-online.service.d
+install -m 0644 "$REPO/deploy/dropins/NetworkManager-wait-online-any.conf" \
+    /etc/systemd/system/NetworkManager-wait-online.service.d/any.conf
+systemctl daemon-reload
+
 say "OwnTone"
 if ! command -v owntone >/dev/null; then
   wget -q -O - https://raw.githubusercontent.com/owntone/owntone-apt/refs/heads/master/repo/rpi/owntone.gpg \
