@@ -4,13 +4,48 @@ Deliberately tiny: OwnTone's UI on :3689 owns everything player-related.
 """
 from __future__ import annotations
 
+import logging
+import threading
+from pathlib import Path
+
 from flask import Flask, jsonify, render_template, request
+from werkzeug.exceptions import BadRequest
 
 from .cards import Card, normalise_uid
+
+log = logging.getLogger(__name__)
 
 
 def create_app(config, controller, store) -> Flask:
     app = Flask(__name__)
+    # add_card and delete_card are read-modify-write over one YAML file, and
+    # Flask serves requests from several threads. Without this, two people
+    # registering cards at the same moment silently lose one of them.
+    store_lock = threading.Lock()
+
+    def _album_dir(raw_path):
+        """Resolve a posted album path inside the library, or explain why not.
+
+        Returns (path, None) or (None, error message). A typo that saved
+        happily would show up only as a card that plays nothing when tapped,
+        with no explanation anywhere -- exactly the failure the box must not
+        have.
+        """
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None, "'path' must be a non-empty album folder path."
+        root = Path(config.library_root)
+        candidate = root / raw_path
+        try:
+            resolved = candidate.resolve()
+            root_resolved = root.resolve()
+        except OSError as exc:
+            return None, f"Could not check album path {raw_path!r}: {exc}"
+        if resolved == root_resolved or not resolved.is_relative_to(root_resolved):
+            return None, f"Album path {raw_path!r} is outside the music library."
+        if not resolved.is_dir():
+            return None, (f"No album folder {raw_path!r} under {root}. "
+                          "Pick one from the list.")
+        return resolved, None
 
     @app.get("/")
     def index():
@@ -27,7 +62,7 @@ def create_app(config, controller, store) -> Flask:
 
     @app.get("/api/albums")
     def albums():
-        root = config.library_root
+        root = Path(config.library_root)
         found = sorted(
             str(path.relative_to(root))
             for path in root.glob("*/*")
@@ -44,18 +79,53 @@ def create_app(config, controller, store) -> Flask:
 
     @app.post("/api/cards")
     def add_card():
-        payload = request.get_json(force=True)
-        uid = normalise_uid(payload["uid"])
-        cards = store.load()
-        cards[uid] = Card(uid=uid, name=payload["name"], path=payload["path"])
-        store.save(cards)
+        try:
+            payload = request.get_json(force=True)
+        except BadRequest:
+            payload = None
+        if not isinstance(payload, dict):
+            return jsonify(error="Expected a JSON object with 'uid', 'name' "
+                                 "and 'path'."), 400
+
+        missing = [k for k in ("uid", "name", "path") if k not in payload]
+        if missing:
+            return jsonify(error=f"Missing required field(s): "
+                                 f"{', '.join(missing)}."), 400
+
+        raw_uid = payload["uid"]
+        uid = normalise_uid(str(raw_uid)) if isinstance(raw_uid, (str, int)) else ""
+        if not uid:
+            return jsonify(error=f"{raw_uid!r} is not a usable card UID."), 400
+
+        name = payload["name"]
+        if not isinstance(name, str) or not name.strip():
+            return jsonify(error="'name' must be a non-empty label for the card."), 400
+
+        _, error = _album_dir(payload["path"])
+        if error:
+            return jsonify(error=error), 400
+
+        card = Card(uid=uid, name=name.strip(), path=payload["path"])
+        try:
+            with store_lock:
+                cards = store.load()
+                cards[uid] = card
+                store.save(cards)
+        except OSError as exc:
+            log.exception("Could not save card registry")
+            return jsonify(error=f"Could not write the card registry: {exc}"), 500
         return jsonify(uid=uid), 201
 
     @app.delete("/api/cards/<uid>")
     def delete_card(uid: str):
-        cards = store.load()
-        cards.pop(normalise_uid(uid), None)
-        store.save(cards)
+        try:
+            with store_lock:
+                cards = store.load()
+                cards.pop(normalise_uid(uid), None)
+                store.save(cards)
+        except OSError as exc:
+            log.exception("Could not save card registry")
+            return jsonify(error=f"Could not write the card registry: {exc}"), 500
         return "", 204
 
     return app

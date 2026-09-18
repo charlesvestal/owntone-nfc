@@ -18,44 +18,72 @@
 <p id="uid">—</p>
 <label>Name <input id="name"></label>
 <label>Album <select id="album"></select></label>
-<button onclick="save()">Save</button>
+<button id="save">Save</button>
 
 <h2>Cards</h2>
 <table><thead><tr><th>Name</th><th>Album</th><th>UID</th><th></th></tr></thead>
 <tbody id="cards"></tbody></table>
 
 <script>
+// Everything below builds nodes and sets textContent rather than innerHTML:
+// album folder names and card labels are arbitrary user text, and one folder
+// named with an <img onerror=...> would otherwise run script on this page.
+function el(tag, text) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+function cardRow(card) {
+  const tr = el('tr');
+  tr.append(el('td', card.name), el('td', card.path), el('td', card.uid));
+  const button = el('button', 'Delete');
+  button.addEventListener('click', () => del(card.uid));
+  const cell = el('td');
+  cell.append(button);
+  tr.append(cell);
+  return tr;
+}
 async function refresh() {
   const s = await (await fetch('/api/status')).json();
   document.getElementById('status').textContent =
-    `${s.state}${s.now_playing ? ' — ' + s.now_playing : ''}` +
-    (s.last_error ? ` · ${s.last_error}` : '');
+    `${s.state}${s.now_playing ? ' \u2014 ' + s.now_playing : ''}` +
+    (s.last_error ? ` \u00b7 ${s.last_error}` : '');
   if (s.last_seen_uid) document.getElementById('uid').textContent = s.last_seen_uid;
 
   const c = await (await fetch('/api/cards')).json();
-  document.getElementById('cards').innerHTML = c.cards.map(card =>
-    `<tr><td>${card.name}</td><td>${card.path}</td><td>${card.uid}</td>
-     <td><button onclick="del('${card.uid}')">Delete</button></td></tr>`).join('');
+  const tbody = document.getElementById('cards');
+  tbody.replaceChildren(...c.cards.map(cardRow));
 }
 async function loadAlbums() {
   const a = await (await fetch('/api/albums')).json();
-  document.getElementById('album').innerHTML =
-    a.albums.map(x => `<option>${x}</option>`).join('');
+  document.getElementById('album').replaceChildren(
+    ...a.albums.map(x => el('option', x)));
 }
 async function save() {
   const uid = document.getElementById('uid').textContent;
-  if (uid === '—') return alert('Tap a card first.');
-  await fetch('/api/cards', {method: 'POST',
+  if (uid === '\u2014') return alert('Tap a card first.');
+  const response = await fetch('/api/cards', {method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({uid,
       name: document.getElementById('name').value,
       path: document.getElementById('album').value})});
+  if (!response.ok) {
+    // Say why, rather than appearing to save and failing silently later.
+    const body = await response.json().catch(() => ({}));
+    return alert(body.error || `Could not save the card (${response.status}).`);
+  }
   document.getElementById('name').value = '';
   refresh();
 }
 async function del(uid) {
-  await fetch('/api/cards/' + uid, {method: 'DELETE'});
+  const response = await fetch('/api/cards/' + encodeURIComponent(uid),
+                               {method: 'DELETE'});
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    alert(body.error || `Could not delete the card (${response.status}).`);
+  }
   refresh();
 }
+document.getElementById('save').addEventListener('click', save);
 loadAlbums(); refresh(); setInterval(refresh, 1000);
 </script>
