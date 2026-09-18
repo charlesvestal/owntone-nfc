@@ -33,6 +33,28 @@ RESET_PULSE_S = 1.0
 PINCTRL_TIMEOUT_S = 5.0
 DEFAULT_RESET_GPIO = 20
 
+# How long a card must be continuously unseen before it counts as lifted.
+#
+# Measured on hardware (Spike 3, 2026-09-18) with two motionless cards:
+# an NTAG213 held for 11s+ with a 35ms worst-case gap, while a 4-byte
+# Mifare-Classic-style card flickered through 725 present/absent cycles in 25s
+# (median hold 0.008s). The flicker is an artefact of how the PN532 answers a
+# re-select for that technology, not of the card moving, so the debounce has to
+# be far longer than any plausible run of failed senses - not merely longer
+# than one.
+#
+# 0.5s is ~14x the NTAG's worst observed gap and covers ten consecutive failed
+# senses at POLL_INTERVAL. It is also short enough that lifting a record stops
+# the music inside half a second, which reads as immediate. Below ~0.3s the
+# margin over an untested, slower-flickering card gets thin; above ~0.75s the
+# lag after a lift becomes audible as lag, and this is a record player.
+DEFAULT_PRESENCE_DEBOUNCE_S = 0.5
+
+# Poll for any target the PN532 over UART can see. 106A covers both cards we
+# have (NTAG213 and the 4-byte Mifare-Classic-style one); 106B and 212F are
+# cheap to include and cover Type B and FeliCa cards we have not tested.
+SENSE_TARGETS = ("106A", "106B", "212F")
+
 
 class BaseReader:
     def __init__(self) -> None:
@@ -69,18 +91,24 @@ class Pn532Reader(BaseReader):
     """
 
     def __init__(self, device: str,
-                 reset_gpio: "int | None" = DEFAULT_RESET_GPIO) -> None:
+                 reset_gpio: "int | None" = DEFAULT_RESET_GPIO,
+                 presence_debounce_s: float = DEFAULT_PRESENCE_DEBOUNCE_S,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         super().__init__()
         self._device = device
         self._reset_gpio = reset_gpio
+        self._debounce = presence_debounce_s
+        self._clock = clock
+        self._warned_unnamed = False
 
     def run(self) -> None:
         import nfc  # imported here so the package works without hardware
 
+        targets = self._sense_targets(nfc)
         while True:
             clf = self._open_frontend(nfc)
             try:
-                self._poll_forever(clf)
+                self._poll_forever(clf, targets)
             except Exception:
                 log.exception("Reader error; reopening")
                 time.sleep(ERROR_BACKOFF)
@@ -156,12 +184,78 @@ class Pn532Reader(BaseReader):
             return False
         return True
 
-    def _poll_forever(self, clf) -> None:
+    @staticmethod
+    def _sense_targets(nfc):
+        """The target descriptors to hand clf.sense() on every poll."""
+        return [nfc.clf.RemoteTarget(spec) for spec in SENSE_TARGETS]
+
+    def _poll_forever(self, clf, targets) -> None:
+        """Turn a noisy per-poll answer into level-triggered events.
+
+        The old loop trusted `tag.is_present` after `clf.connect()`. That is not
+        a level signal: it re-selects the tag to answer, and for a 4-byte
+        Mifare-Classic-style card the re-select fails within milliseconds even
+        though the card has not moved. Live, that became ~29 present/removed
+        pairs a second and a play/pause storm at OwnTone loud enough to keep
+        audio from ever starting.
+
+        `clf.sense()` instead asks the one question that means the same thing
+        for every technology - is a target answering in the field right now -
+        and a debounce turns its flicker back into the level the rest of the
+        system has always assumed it was getting.
+        """
+        present_uid: str | None = None
+        last_seen = 0.0
+
         while True:
-            tag = clf.connect(rdwr={"on-connect": lambda tag: False})
-            if tag is None:
-                continue
-            self.on_present(normalise_uid(tag.identifier.hex()))
-            while tag.is_present:
-                time.sleep(POLL_INTERVAL)
-            self.on_removed()
+            uid = self._sense_uid(clf, targets)
+            now = self._clock()
+
+            if uid is not None:
+                last_seen = now
+                if uid != present_uid:
+                    # A different card is a deliberate swap, not a dropped
+                    # read, so it switches on the poll it first appears. No
+                    # removal is emitted: on_present(uid) already says which
+                    # record is on the platter, and a synthetic pause between
+                    # the two would only make the swap audible as a gap.
+                    present_uid = uid
+                    self.on_present(uid)
+            elif present_uid is not None and now - last_seen >= self._debounce:
+                present_uid = None
+                self.on_removed()
+
+            time.sleep(POLL_INTERVAL)
+
+    def _sense_uid(self, clf, targets) -> "str | None":
+        """The UID of whatever is in the field right now, or None."""
+        target = clf.sense(*targets, iterations=1)
+        if target is None:
+            return None
+        raw = self._target_identifier(target)
+        if raw is None:
+            # Something answered but we cannot name it. Treating that as
+            # presence without a UID would be worse than ignoring it: the
+            # controller keys everything off the UID. Reported once per run of
+            # them - at 20 polls a second, every time would be the whole log.
+            if not self._warned_unnamed:
+                self._warned_unnamed = True
+                log.warning("Sensed a target with no usable identifier: %r",
+                            target)
+            return None
+        self._warned_unnamed = False
+        return normalise_uid(raw.hex())
+
+    @staticmethod
+    def _target_identifier(target) -> "bytes | None":
+        """Pull the UID out of an nfcpy RemoteTarget, whatever its technology."""
+        sdd_res = getattr(target, "sdd_res", None)      # Type A: the NFCID1
+        if sdd_res:
+            return bytes(sdd_res)
+        sensf_res = getattr(target, "sensf_res", None)  # FeliCa: NFCID2
+        if sensf_res and len(sensf_res) >= 9:
+            return bytes(sensf_res[1:9])
+        sensb_res = getattr(target, "sensb_res", None)  # Type B: the PUPI
+        if sensb_res and len(sensb_res) >= 5:
+            return bytes(sensb_res[1:5])
+        return None

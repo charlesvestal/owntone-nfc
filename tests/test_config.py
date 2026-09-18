@@ -202,3 +202,24 @@ def test_boolean_is_not_accepted_as_a_reset_gpio(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("reset_gpio: true\n")
     assert Config.load(path).reset_gpio == 20
+
+
+def test_presence_debounce_default_matches_the_reader():
+    from nfc_jukebox import reader
+
+    assert Config().presence_debounce_s == reader.DEFAULT_PRESENCE_DEBOUNCE_S
+
+
+def test_presence_debounce_is_configurable(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("presence_debounce_s: 0.8\n")
+    assert Config.load(path).presence_debounce_s == 0.8
+
+
+def test_bad_presence_debounce_falls_back_to_the_default(tmp_path, caplog):
+    path = tmp_path / "config.yaml"
+    path.write_text("presence_debounce_s: sometimes\n")
+    with caplog.at_level(logging.WARNING):
+        cfg = Config.load(path)
+    assert cfg.presence_debounce_s == Config().presence_debounce_s
+    assert "presence_debounce_s" in caplog.text

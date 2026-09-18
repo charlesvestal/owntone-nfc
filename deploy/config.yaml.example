@@ -7,6 +7,16 @@ reader_device: "tty:AMA0:pn532"
 # Measured in Spike 2 (2026-09-18): 35ms worst-case presence gap on this
 # hardware. 0.25 is ~7x margin, and below human lift-and-replace speed.
 bump_window_s: 0.25
+# How long a card must be continuously unseen before the reader treats it as
+# lifted. Measured in Spike 3 (2026-09-18): a 4-byte Mifare-Classic-style card
+# sitting motionless reported 725 present/absent cycles in 25 seconds (median
+# hold 0.008s) because the PN532's re-select for that technology keeps failing,
+# while an NTAG213 held solid with a 35ms worst-case gap. Undebounced, the
+# flicker became a play/pause storm at OwnTone and the box was silent while
+# reporting "playing". 0.5 rides out any plausible run of missed reads and
+# still stops the music within half a second of lifting a record.
+# Raise it if an untested card still stutters; lower it if a lift feels laggy.
+presence_debounce_s: 0.5
 grace_period_s: 90.0
 web_port: 8080
 # BCM pin wired to the PN532's RSTPDN (active-low reset). On the Waveshare

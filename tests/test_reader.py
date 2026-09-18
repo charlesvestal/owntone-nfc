@@ -181,3 +181,145 @@ def test_journal_distinguishes_retrying_from_reset_attempted(slept, pinctrl, cap
 
 def test_default_reset_pin_is_the_jumpered_one():
     assert Pn532Reader("tty:AMA0:pn532")._reset_gpio == 20
+
+
+# --- Presence debouncing ----------------------------------------------------
+#
+# Measured on hardware (2026-09-18) with two motionless cards over 25s:
+#
+#   NTAG213      044ef792816b81  one continuous hold, 11s+, 35ms worst jitter
+#   Mifare-ish   cc7da7ee        725 present/absent cycles, median hold 0.008s
+#
+# The 4-byte card's "absence" is an artefact of re-selection failing, not of
+# the card moving. Undebounced, it produced ~29 present/removed pairs a second
+# and an unbroken play/pause storm at OwnTone, so the user heard silence while
+# the status said "playing". The reader must therefore emit level-triggered
+# events that both technologies agree on.
+
+
+class StopPolling(Exception):
+    """Raised by the fake frontend to end an otherwise infinite poll loop."""
+
+
+class FakeTarget:
+    """What nfcpy's clf.sense() hands back for a type-A target."""
+
+    def __init__(self, uid: str) -> None:
+        self.sdd_res = bytes.fromhex(uid)
+
+
+class FakeClf:
+    """Fake nfcpy frontend replaying a scripted per-poll presence sequence."""
+
+    def __init__(self, script) -> None:
+        self.script = list(script)
+        self.senses = 0
+
+    def sense(self, *targets, **kwargs):
+        if self.senses >= len(self.script):
+            raise StopPolling
+        uid = self.script[self.senses]
+        self.senses += 1
+        return FakeTarget(uid) if uid is not None else None
+
+    def close(self):
+        pass
+
+
+class Clock:
+    """A fake monotonic clock that only advances when the reader sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def run_poll(script, debounce=None, monkeypatch=None):
+    """Drive _poll_forever over a scripted sequence; return timestamped events."""
+    clock = Clock()
+    monkeypatch.setattr(reader_mod.time, "sleep", clock.sleep)
+    kwargs = {} if debounce is None else {"presence_debounce_s": debounce}
+    reader = Pn532Reader("tty:AMA0:pn532", clock=clock.monotonic, **kwargs)
+    events = []
+    reader.on_present = lambda uid: events.append(("present", uid, clock.now))
+    reader.on_removed = lambda: events.append(("removed", None, clock.now))
+    clf = FakeClf(script)
+    with pytest.raises(StopPolling):
+        reader._poll_forever(clf, targets=["106A"])
+    return events, clock
+
+
+NTAG = "044ef792816b81"
+MIFARE = "cc7da7ee"
+
+
+def test_flickering_card_reports_one_unbroken_presence(monkeypatch):
+    """The 8ms-cycle card: absent on every other poll, never actually moved."""
+    script = [MIFARE, None] * 300
+    events, _ = run_poll(script, monkeypatch=monkeypatch)
+    assert [(kind, uid) for kind, uid, _ in events] == [("present", MIFARE)]
+
+
+def test_continuous_card_reports_one_clean_pair(monkeypatch):
+    """The NTAG213 case: solidly present, then genuinely lifted."""
+    script = [NTAG] * 300 + [None] * 100
+    events, _ = run_poll(script, monkeypatch=monkeypatch)
+    assert [(kind, uid) for kind, uid, _ in events] == [
+        ("present", NTAG), ("removed", None),
+    ]
+
+
+def test_removal_is_reported_only_after_the_debounce(monkeypatch):
+    debounce = 0.5
+    script = [NTAG] * 10 + [None] * 200
+    events, _ = run_poll(script, debounce=debounce, monkeypatch=monkeypatch)
+
+    kinds = [e[0] for e in events]
+    assert kinds == ["present", "removed"]
+    last_seen = (10 - 1) * reader_mod.POLL_INTERVAL
+    removed_at = events[1][2]
+    assert removed_at >= last_seen + debounce
+    assert removed_at < last_seen + debounce + 2 * reader_mod.POLL_INTERVAL
+
+
+def test_debounce_interval_is_configurable(monkeypatch):
+    script = [NTAG] * 10 + [None] * 200
+    quick, _ = run_poll(script, debounce=0.1, monkeypatch=monkeypatch)
+    slow, _ = run_poll(script, debounce=1.0, monkeypatch=monkeypatch)
+    assert quick[1][2] < slow[1][2]
+
+
+def test_a_different_card_switches_immediately(monkeypatch):
+    """A deliberate swap must not wait out the debounce."""
+    script = [NTAG] * 5 + [MIFARE] * 5
+    events, _ = run_poll(script, debounce=5.0, monkeypatch=monkeypatch)
+    assert [(kind, uid) for kind, uid, _ in events] == [
+        ("present", NTAG), ("present", MIFARE),
+    ]
+    # Announced on the very poll it first appeared, not a debounce later.
+    assert events[1][2] == 5 * reader_mod.POLL_INTERVAL
+
+
+def test_a_replaced_card_after_a_real_removal_is_a_fresh_present(monkeypatch):
+    script = [NTAG] * 5 + [None] * 200 + [NTAG] * 5
+    events, _ = run_poll(script, debounce=0.5, monkeypatch=monkeypatch)
+    assert [(kind, uid) for kind, uid, _ in events] == [
+        ("present", NTAG), ("removed", None), ("present", NTAG),
+    ]
+
+
+def test_uid_is_normalised(monkeypatch):
+    events, _ = run_poll([MIFARE.upper()], monkeypatch=monkeypatch)
+    assert events[0][1] == MIFARE
+
+
+def test_default_debounce_rides_out_the_measured_flicker():
+    """Default must cover far more than the 35ms worst-case observed gap."""
+    assert Pn532Reader("tty:AMA0:pn532")._debounce >= 0.3
+    # ...and still stop the music well inside a second of a lift.
+    assert Pn532Reader("tty:AMA0:pn532")._debounce <= 0.75
