@@ -4,7 +4,8 @@ library_root: /srv/music
 cards_file: /etc/nfc-jukebox/cards.yaml
 outputs_file: /var/lib/nfc-jukebox/outputs.json
 reader_device: "tty:AMA0:pn532"
-# Set from the Spike 2 measurement (Task 6), not guessed.
-bump_window_s: 0.5
+# Measured in Spike 2 (2026-09-18): 35ms worst-case presence gap on this
+# hardware. 0.25 is ~7x margin, and below human lift-and-replace speed.
+bump_window_s: 0.25
 grace_period_s: 90.0
 web_port: 8080

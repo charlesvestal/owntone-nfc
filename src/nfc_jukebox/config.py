@@ -28,8 +28,18 @@ class Config:
     cards_file: Path = Path("/etc/nfc-jukebox/cards.yaml")
     outputs_file: Path = Path("/var/lib/nfc-jukebox/outputs.json")
     reader_device: str = "tty:AMA0:pn532"
-    # Set from the Spike 2 measurement, not guessed.
-    bump_window_s: float = 0.5
+    # Measured, not guessed (Spike 2, 2026-09-18): a stationary NTAG213 on a
+    # PN532 over UART showed a 35ms worst-case gap between presence reads over
+    # ~11s. 0.25s is ~7x that margin, and safely below how fast a human can
+    # lift and replace a card - so a dropped read resumes, a deliberate lift
+    # restarts.
+    #
+    # That measurement was taken on a BARE board with the card resting on it.
+    # An enclosure adds distance and will widen the gap, so re-measure once the
+    # box is built by re-running spikes/presence_check.py on the Pi. This is a
+    # config value, so tuning it is an edit to /etc/nfc-jukebox/config.yaml plus
+    # a service restart - no code change needed.
+    bump_window_s: float = 0.25
     grace_period_s: float = 90.0
     web_port: int = 8080
 
