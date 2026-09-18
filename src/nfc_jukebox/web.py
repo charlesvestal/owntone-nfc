@@ -8,6 +8,8 @@ import logging
 import threading
 from pathlib import Path
 
+from urllib.parse import urlparse
+
 from flask import Flask, jsonify, render_template, request
 from werkzeug.exceptions import BadRequest
 
@@ -49,7 +51,12 @@ def create_app(config, controller, store) -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("index.html", owntone_url=config.owntone_url)
+        # Only the PORT is passed: config.owntone_url is how the *server*
+        # reaches OwnTone (127.0.0.1), which as a link would point the
+        # browser at the viewer's own machine. The page builds the href from
+        # whatever hostname the user actually used to get here.
+        return render_template("index.html",
+                               owntone_port=urlparse(config.owntone_url).port or 3689)
 
     @app.get("/api/status")
     def status():
