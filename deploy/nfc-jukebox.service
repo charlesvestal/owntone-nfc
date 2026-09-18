@@ -1,0 +1,21 @@
+# deploy/nfc-jukebox.service -> /etc/systemd/system/nfc-jukebox.service
+[Unit]
+Description=NFC Vinyl Jukebox
+# OwnTone must be up before we start issuing API calls.
+After=network-online.target owntone.service
+Wants=network-online.target
+Requires=owntone.service
+# Do not start before the music is actually mounted. Harmless for local
+# storage; essential if library_root becomes a NAS mount (Task 16).
+RequiresMountsFor=/srv/music
+
+[Service]
+Type=simple
+User=pi
+Group=dialout
+ExecStart=/opt/nfc-jukebox/venv/bin/python -m nfc_jukebox
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

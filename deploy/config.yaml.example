@@ -1,0 +1,10 @@
+# deploy/config.yaml.example -> /etc/nfc-jukebox/config.yaml
+owntone_url: http://127.0.0.1:3689
+library_root: /srv/music
+cards_file: /etc/nfc-jukebox/cards.yaml
+outputs_file: /var/lib/nfc-jukebox/outputs.json
+reader_device: "tty:AMA0:pn532"
+# Set from the Spike 2 measurement (Task 6), not guessed.
+bump_window_s: 0.5
+grace_period_s: 90.0
+web_port: 8080
