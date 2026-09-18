@@ -16,6 +16,8 @@ from pathlib import Path
 
 import yaml
 
+from . import reader
+
 log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path("/etc/nfc-jukebox/config.yaml")
@@ -40,6 +42,14 @@ class Config:
     # config value, so tuning it is an edit to /etc/nfc-jukebox/config.yaml plus
     # a service restart - no code change needed.
     bump_window_s: float = 0.25
+    # How long a card must be continuously unseen before the reader calls it
+    # lifted. See reader.DEFAULT_PRESENCE_DEBOUNCE_S for the measurements: a
+    # 4-byte Mifare-Classic-style card reports itself absent hundreds of times
+    # a second while lying motionless on the reader, and without this the box
+    # plays and pauses so fast that nothing is ever audible. Raise it if a card
+    # technology we have not tested still stutters; lower it if lifting a
+    # record feels laggy.
+    presence_debounce_s: float = reader.DEFAULT_PRESENCE_DEBOUNCE_S
     grace_period_s: float = 90.0
     web_port: int = 8080
     # BCM pin wired to the PN532's RSTPDN (active-low reset). On the Waveshare
@@ -52,7 +62,8 @@ class Config:
 
     _PATH_FIELDS = ("library_root", "cards_file", "outputs_file")
     _STR_FIELDS = ("owntone_url", "reader_device")
-    _POSITIVE_FLOAT_FIELDS = ("bump_window_s", "grace_period_s")
+    _POSITIVE_FLOAT_FIELDS = ("bump_window_s", "presence_debounce_s",
+                              "grace_period_s")
 
     @classmethod
     def load(cls, path: Path = DEFAULT_CONFIG_PATH) -> "Config":
