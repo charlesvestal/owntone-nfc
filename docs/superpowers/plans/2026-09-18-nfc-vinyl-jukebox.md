@@ -410,7 +410,7 @@ paths. Never abandon the design on a Stage A failure alone; always run Stage B.
 - [ ] Deselecting the output releases the HomePods (they return to idle)
 - [ ] The working configuration is written into `docs/runbook.md`
 
-**Verify:** `curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool | grep -A3 airplay` → HomePod output present with `"selected": true` during playback
+**Verify:** `curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool | grep -iA3 airplay` → HomePod output present with `"selected": true` during playback
 
 **Steps:**
 
@@ -434,9 +434,9 @@ Set it low but not muted — you need to hear *something* to confirm the path wo
 - [ ] **Step A3: Confirm the Mac appears and plays**
 
 ```bash
-curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool | grep -B2 -A3 airplay
+curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool | grep -iB2 -A3 airplay
 MAC=$(curl -s http://jukebox.local:3689/api/outputs \
-  | python3 -c "import sys,json; print([o['id'] for o in json.load(sys.stdin)['outputs'] if o['type']=='airplay'][0])")
+  | python3 -c "import sys,json; print([o['id'] for o in json.load(sys.stdin)['outputs'] if o['type'].lower().startswith('airplay')][0])")
 curl -s -X PUT -H 'Content-Type: application/json' \
   -d "{\"outputs\":[\"$MAC\"]}" http://jukebox.local:3689/api/outputs/set
 curl -s -X POST "http://jukebox.local:3689/api/queue/items/add?expression=media_kind+is+music&limit=1&clear=true&playback=start"
@@ -491,7 +491,7 @@ Expected: an entry with `"type": "airplay"` named after the HomePod pair.
 
 ```bash
 OUT=$(curl -s http://jukebox.local:3689/api/outputs \
-  | python3 -c "import sys,json; print([o['id'] for o in json.load(sys.stdin)['outputs'] if o['type']=='airplay'][0])")
+  | python3 -c "import sys,json; print([o['id'] for o in json.load(sys.stdin)['outputs'] if o['type'].lower().startswith('airplay')][0])")
 curl -s -X PUT -H 'Content-Type: application/json' \
   -d "{\"outputs\":[\"$OUT\"]}" http://jukebox.local:3689/api/outputs/set
 
@@ -548,7 +548,15 @@ git commit -m "docs: record Spike 0 HomePod reachability results"
 
 ### Task 5: Spike 1 — queue an album by relative path
 
-**Goal:** Determine the exact OwnTone `expression` syntax that queues one album, in correct track order, from a library-root-relative path.
+**Goal:** Confirm against a live server the OwnTone `expression` syntax that queues one album, in correct track order, from a library-root-relative path.
+
+> **Updated after source verification.** The grammar was checked against OwnTone's
+> smart-playlist lexer (`src/parsers/smartpl_lexer.l`): `path`, `includes`,
+> `starts with`, `order by`, `asc`/`desc` are valid tokens, and the integer tags are
+> **`disc`** and **`track`** — *not* `disc_number`/`track_number`, which are JSON-API
+> field names and would have failed to parse, returning 400 on every card tap.
+> The code now uses the verified spelling. This spike confirms it against a running
+> server, which source-reading cannot substitute for.
 
 **Files:**
 - Modify: `docs/runbook.md`
@@ -572,6 +580,8 @@ syntax, not the decision.
 
 ```bash
 ALBUM="Miles Davis/Kind of Blue"   # replace with a real album from Task 2
+# Note the trailing slash: the code anchors the match so that a card mapped to
+# "Rumours" cannot also sweep in "Rumours (Deluxe)".
 curl -s -X PUT http://jukebox.local:3689/api/queue/clear
 ```
 
@@ -579,7 +589,7 @@ curl -s -X PUT http://jukebox.local:3689/api/queue/clear
 
 ```bash
 curl -s -G -X POST http://jukebox.local:3689/api/queue/items/add \
-  --data-urlencode "expression=path includes \"$ALBUM\" order by disc_number asc, track_number asc" \
+  --data-urlencode "expression=path includes \"$ALBUM/\" order by disc asc, track asc" \
   --data-urlencode "clear=true"
 ```
 
@@ -588,6 +598,9 @@ curl -s -G -X POST http://jukebox.local:3689/api/queue/items/add \
 ```bash
 curl -s http://jukebox.local:3689/api/queue \
   | python3 -c "import sys,json; q=json.load(sys.stdin)['items']; print(len(q),'tracks'); [print(t.get('disc_number'), t.get('track_number'), t['title']) for t in q]"
+# NB: disc_number/track_number ARE correct here - these are JSON-API track
+# objects. Only the *expression grammar* uses disc/track. Confusing the two is
+# what caused the original bug.
 ```
 
 Expected: the album's track count, ascending track numbers, nothing foreign.
@@ -1043,9 +1056,10 @@ from __future__ import annotations
 
 import httpx
 
-# Verified in Spike 1 (Task 5). If that spike found a different working syntax,
-# this is the single place to change it.
-ALBUM_EXPRESSION = 'path includes "{path}" order by disc_number asc, track_number asc'
+# Verified against OwnTone's smart-playlist lexer, NOT yet against a live server.
+# The integer tags are `disc`/`track`; `disc_number`/`track_number` are JSON-API
+# field names and do not parse here. Single place to change if Spike 1 disagrees.
+ALBUM_EXPRESSION = 'path includes "{path}" order by disc asc, track asc'
 
 
 class OwnTone:
@@ -2633,7 +2647,7 @@ the observed timings.
 
 ```bash
 # Select the HomePods in OwnTone's UI, then:
-curl -s localhost:3689/api/outputs | python3 -m json.tool | grep -A2 airplay
+curl -s localhost:3689/api/outputs | python3 -m json.tool | grep -iA2 airplay
 ```
 
 Tap a card, play, remove it, wait out the grace period, then confirm the HomePods
