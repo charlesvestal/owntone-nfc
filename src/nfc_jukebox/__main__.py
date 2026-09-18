@@ -35,7 +35,7 @@ def main() -> None:
         config=config,
     )
 
-    reader = Pn532Reader(config.reader_device)
+    reader = Pn532Reader(config.reader_device, reset_gpio=config.reset_gpio)
     reader.on_present = controller.on_card_present
     reader.on_removed = controller.on_card_removed
 
