@@ -19,6 +19,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Flask resolves templates/ relative to the package directory. Without this,
+# a non-editable install (pip install .) silently omits index.html and the
+# admin page 500s on a missing template.
+[tool.setuptools.package-data]
+nfc_jukebox = ["templates/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
