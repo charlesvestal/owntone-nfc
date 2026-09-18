@@ -146,3 +146,59 @@ def test_non_finite_timing_falls_back_to_default(tmp_path):
     cfg = Config.load(path)
     assert cfg.grace_period_s == Config().grace_period_s
     assert cfg.bump_window_s == Config().bump_window_s
+
+
+# --- reset_gpio -------------------------------------------------------------
+
+
+def test_reset_gpio_defaults_to_the_jumpered_pin(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("web_port: 8080\n")
+    assert Config.load(path).reset_gpio == 20
+
+
+def test_reset_gpio_can_be_moved_to_another_pin(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("reset_gpio: 17\n")
+    assert Config.load(path).reset_gpio == 17
+
+
+def test_null_reset_gpio_disables_the_reset(tmp_path):
+    """A board without the RSTPDN jumper must be able to opt out."""
+    path = tmp_path / "config.yaml"
+    path.write_text("reset_gpio: null\n")
+    assert Config.load(path).reset_gpio is None
+
+
+def test_empty_reset_gpio_disables_the_reset(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("reset_gpio:\n")
+    assert Config.load(path).reset_gpio is None
+
+
+def test_reset_gpio_none_keyword_disables_the_reset(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text('reset_gpio: "none"\n')
+    assert Config.load(path).reset_gpio is None
+
+
+def test_out_of_range_reset_gpio_falls_back_to_default(tmp_path, caplog):
+    path = tmp_path / "config.yaml"
+    path.write_text("reset_gpio: 99\n")
+    with caplog.at_level(logging.WARNING):
+        assert Config.load(path).reset_gpio == 20
+    assert "reset_gpio" in caplog.text
+
+
+def test_non_numeric_reset_gpio_falls_back_to_default(tmp_path, caplog):
+    path = tmp_path / "config.yaml"
+    path.write_text("reset_gpio: [20]\n")
+    with caplog.at_level(logging.WARNING):
+        assert Config.load(path).reset_gpio == 20
+    assert "reset_gpio" in caplog.text
+
+
+def test_boolean_is_not_accepted_as_a_reset_gpio(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("reset_gpio: true\n")
+    assert Config.load(path).reset_gpio == 20

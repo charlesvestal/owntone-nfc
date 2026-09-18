@@ -9,3 +9,14 @@ reader_device: "tty:AMA0:pn532"
 bump_window_s: 0.25
 grace_period_s: 90.0
 web_port: 8080
+# BCM pin wired to the PN532's RSTPDN (active-low reset). On the Waveshare
+# PN532 HAT that pin is jumpered to D20. Restarting the service mid-read can
+# leave the chip out of frame sync, after which every open fails with
+# "Connection timed out" forever and the box looks healthy while never reading
+# another card; pulsing this line low for a second is the only thing that
+# clears it. The reader does that automatically after two failed opens in a
+# row. Requires pinctrl (apt install raspi-utils) and permission to drive the
+# pin; if either is missing it logs and keeps retrying.
+# Set to null on a board with no RSTPDN jumper, or change it if yours is
+# jumpered elsewhere.
+reset_gpio: 20
