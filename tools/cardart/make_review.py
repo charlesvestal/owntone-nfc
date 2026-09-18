@@ -11,28 +11,34 @@ title does not resemble what was searched for is flagged harder.
 from __future__ import annotations
 
 import argparse
-import difflib
 import html
 import json
 import os
+import sys
 
-
-def similarity(a: str, b: str) -> float:
-    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from artlib import MATCH_FLOOR  # noqa: E402
 
 
 def classify(entry: dict, min_px: int) -> tuple[str, str]:
-    """(css class, human reason) for one manifest entry."""
-    source = entry.get("source", "")
-    if entry.get("status") != "ok":
+    """(css class, human reason) for one manifest entry.
+
+    The fit score is the fetcher's, not recomputed here: the two drifting
+    apart would mean the page disagreed with the thing that chose the image.
+    """
+    status = entry.get("status")
+    if status == "skipped":
+        return "skipped", entry.get("reason", "skipped")
+    if status != "ok":
         return "bad", "nothing found"
     if entry["width"] < min_px:
         return "bad", f"only {entry['width']}px"
-    if source.startswith(("file:", "embedded:")):
+    if entry.get("override"):
+        return "local", "pinned by hand"
+    if entry.get("source", "").startswith(("file:", "embedded:")):
         return "local", "from the library"
-    matched = source.split(":", 1)[1] if ":" in source else source
-    if similarity(entry.get("searched", ""), matched) < 0.62:
-        return "suspect", "matched title looks different"
+    if entry.get("score", 1.0) < MATCH_FLOOR:
+        return "suspect", "matched title looks wrong"
     return "fetched", "from a search"
 
 
@@ -55,6 +61,7 @@ figure.local   { border-top-color:#9fb89f; }
 figure.fetched { border-top-color:#8fa8c8; }
 figure.suspect { border-top-color:#e0a63e; }
 figure.bad     { border-top-color:#c9584f; }
+figure.skipped { border-top-color:#bdbdbd; opacity:.55; }
 img { display:block; width:100%; aspect-ratio:1; object-fit:cover;
       background:#e8e6e3; }
 .none { display:flex; aspect-ratio:1; align-items:center; justify-content:center;
@@ -83,7 +90,7 @@ def main() -> int:
     with open(os.path.join(args.dir, "manifest.json")) as handle:
         manifest = json.load(handle)
 
-    order = {"bad": 0, "suspect": 1, "fetched": 2, "local": 3}
+    order = {"bad": 0, "suspect": 1, "fetched": 2, "local": 3, "skipped": 4}
     rows = []
     for path, entry in manifest.items():
         css, why = classify(entry, args.min_px)
@@ -101,7 +108,7 @@ def main() -> int:
                     f'{html.escape(entry["source"].split(":", 1)[0])}'
                     f'<br>{html.escape(entry["source"].split(":", 1)[-1])}')
         else:
-            img = '<div class="none">no artwork found</div>'
+            img = f'<div class="none">{html.escape(why)}</div>'
             meta = "&mdash;"
         cards.append(
             f'<figure class="{css}">{img}<figcaption>'
@@ -114,7 +121,8 @@ def main() -> int:
     summary = (f'{counts.get("local", 0)} from the library, '
                f'{counts.get("fetched", 0)} fetched, '
                f'{counts.get("suspect", 0)} to check, '
-               f'{counts.get("bad", 0)} unusable')
+               f'{counts.get("bad", 0)} unusable, '
+               f'{counts.get("skipped", 0)} skipped')
     out = args.out or os.path.join(args.dir, "review.html")
     with open(out, "w") as handle:
         handle.write(
