@@ -5,6 +5,10 @@
   table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
   td, th { text-align: left; padding: .4rem; border-bottom: 1px solid #ddd; }
   #uid { font-family: ui-monospace, monospace; font-size: 1.3rem; }
+  #art { width: 200px; height: 200px; object-fit: cover; border-radius: 4px;
+         background: #eee; display: block; margin: .5rem 0; }
+  #mgmtbanner { background: #fff3cd; border: 1px solid #e0c97f; color: #6b5400;
+                padding: .5rem .75rem; border-radius: 4px; font-weight: 600; }
   #album { width: 100%; font-family: ui-monospace, monospace; font-size: .85rem; }
   label { display: block; margin: .3rem 0; }
   .muted { color: #666; }
@@ -15,10 +19,15 @@
 <p class="muted">Player controls, volume and speakers live in
   <a id="owntone" href="#">OwnTone</a>.</p>
 
+<p id="mgmtbanner" hidden></p>
+<label><input type="checkbox" id="mgmt" onchange="setMgmt()">
+  <strong>Management mode</strong> &mdash; cards identify themselves but do not play</label>
+
 <h2>Register a card</h2>
 <p>Tap a card on the reader. Its ID appears here.</p>
 <p id="uid">—</p>
 <p id="known" class="muted">&nbsp;</p>
+<img id="art" alt="" hidden>
 <label>Filter <input id="albumfilter" size="34" autocomplete="off"
        placeholder="type to narrow the list…" oninput="renderAlbums()"></label>
 <label><input type="checkbox" id="onlyfree" onchange="renderAlbums()"> only albums without a card</label>
@@ -73,6 +82,17 @@ async function refresh() {
   // Say plainly whether this card is already assigned. Without this the page
   // shows a bare UID beside whatever album was last selected, which looks
   // like the card's current mapping.
+  // Management mode has to be unmissable: a box that quietly refuses to play
+  // is a confusing thing to walk up to.
+  const mgmt = document.getElementById('mgmt');
+  if (mgmt && document.activeElement !== mgmt) mgmt.checked = !!s.management_mode;
+  const banner = document.getElementById('mgmtbanner');
+  if (banner) {
+    banner.hidden = !s.management_mode;
+    banner.textContent = 'MANAGEMENT MODE \u2014 cards will not play. '
+      + 'Untick to use the jukebox normally.';
+  }
+
   const known = document.getElementById('known') || {};
   if (!s.last_seen_uid) {
     known.textContent = '\u00a0';
@@ -89,6 +109,9 @@ async function refresh() {
   } else {
     known.textContent = 'Not registered yet \u2014 choose an album and Save to assign it.';
   }
+  // Artwork is fetched only when the scanned card changes: it costs a search
+  // on OwnTone, and this runs once a second.
+  if (s.last_seen_uid !== lastShownUid) showArt(s.last_seen_path);
   lastShownUid = s.last_seen_uid;
 
   // Only ever replace the table with a list we actually got. A failed or
@@ -103,6 +126,33 @@ async function refresh() {
 
 // refresh() runs once a second forever; an unhandled rejection would stop
 // reporting errors silently. Surface it on the status line and carry on.
+async function showArt(path) {
+  const img = document.getElementById('art');
+  if (!img) return;
+  if (!path) { img.hidden = true; img.removeAttribute('src'); return; }
+  try {
+    const r = await (await fetch('/api/artwork?path=' + encodeURIComponent(path))).json();
+    if (r.url) {
+      // Resolved against the host this page was reached on, not the loopback
+      // address the service uses to talk to OwnTone.
+      img.src = location.protocol + '//' + location.hostname + ':{{ owntone_port }}' + r.url;
+      img.hidden = false;
+    } else {
+      img.hidden = true; img.removeAttribute('src');
+    }
+  } catch (e) {
+    img.hidden = true; img.removeAttribute('src');
+  }
+}
+
+async function setMgmt() {
+  const on = document.getElementById('mgmt').checked;
+  await fetch('/api/management', {method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled: on})});
+  refresh();
+}
+
 async function tick() {
   try {
     await refresh();

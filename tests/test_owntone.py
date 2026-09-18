@@ -217,3 +217,29 @@ def test_play_album_leaves_single_quotes_alone(client):
     client.play_album("Led Zeppelin/Rock 'n' Roll")
     expression = respx.calls.last.request.url.params["expression"]
     assert expression.startswith('path includes "Led Zeppelin/Rock \'n\' Roll/"')
+
+
+@respx.mock
+def test_album_artwork_url_is_returned_rooted(client):
+    respx.get(url__startswith=f"{BASE}/api/search").mock(
+        return_value=httpx.Response(200, json={
+            "albums": {"items": [{"name": "Parklife",
+                                  "artwork_url": "./artwork/group/7"}]}}))
+    # OwnTone returns "./artwork/group/7"; a browser would resolve that against
+    # the current page, so it must come back rooted.
+    assert client.album_artwork_url("Blur/Parklife") == "/artwork/group/7"
+
+
+@respx.mock
+def test_album_artwork_url_is_none_when_no_album_matches(client):
+    respx.get(url__startswith=f"{BASE}/api/search").mock(
+        return_value=httpx.Response(200, json={"albums": {"items": []}}))
+    assert client.album_artwork_url("Nope/Nothing") is None
+
+
+@respx.mock
+def test_album_artwork_url_is_none_when_album_has_no_art(client):
+    respx.get(url__startswith=f"{BASE}/api/search").mock(
+        return_value=httpx.Response(200, json={
+            "albums": {"items": [{"name": "Parklife"}]}}))
+    assert client.album_artwork_url("Blur/Parklife") is None

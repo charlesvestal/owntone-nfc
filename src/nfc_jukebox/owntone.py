@@ -165,5 +165,28 @@ class OwnTone:
     def clear_queue(self) -> None:
         self._request("PUT", "/api/queue/clear")
 
+    def album_artwork_url(self, relative_path: str) -> str | None:
+        """OwnTone-relative artwork URL for the album at this path, if any.
+
+        Returned relative (e.g. `/artwork/group/7`) because the caller - a
+        browser - must resolve it against the host it reached OwnTone on, not
+        against the loopback address this client uses.
+        """
+        response = self._request(
+            "GET", "/api/search",
+            params={"type": "albums",
+                    "expression": ALBUM_EXPRESSION.format(path=_anchor(relative_path)),
+                    "limit": 1},
+        ).json()
+        items = response.get("albums", {}).get("items", [])
+        if not items:
+            return None
+        url = items[0].get("artwork_url")
+        if not url:
+            return None
+        # OwnTone returns these as "./artwork/group/7"; normalise to a rooted
+        # path so the browser cannot resolve it against the current page.
+        return "/" + url.lstrip("./")
+
     def player_state(self) -> dict:
         return self._request("GET", "/api/player").json()

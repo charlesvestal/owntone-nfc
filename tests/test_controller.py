@@ -652,3 +652,68 @@ def test_owntones_own_fallback_to_local_is_not_mistaken_for_a_user_choice(ctx):
 
     assert controller.last_error is not None
     assert "2" in controller.last_error
+
+
+def test_management_mode_identifies_cards_without_playing(ctx):
+    # Registering a stack of cards while each tap starts an album is the wrong
+    # experience, especially with speakers in a living room.
+    controller, owntone, _, _ = ctx
+    controller.set_management_mode(True)
+    owntone.calls.clear()
+
+    controller.on_card_present("aaaa")
+
+    assert controller.last_seen_uid == "aaaa"
+    assert not any(c[0] == "play_album" for c in owntone.calls)
+    assert not any(c[0] == "play" for c in owntone.calls)
+    assert controller.state is State.IDLE
+
+
+def test_management_mode_still_learns_unregistered_cards(ctx):
+    controller, _, _, _ = ctx
+    controller.set_management_mode(True)
+    controller.on_card_present("ffff")
+    assert controller.last_seen_uid == "ffff"
+    assert controller.last_error is not None
+
+
+def test_management_mode_clears_the_error_for_a_known_card(ctx):
+    controller, _, _, _ = ctx
+    controller.set_management_mode(True)
+    controller.on_card_present("ffff")
+    assert controller.last_error is not None
+    controller.on_card_present("aaaa")
+    assert controller.last_error is None
+
+
+def test_enabling_management_mode_stops_playback(ctx):
+    # The point is a quiet box to register against; leaving the current album
+    # running would defeat it.
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+    assert controller.state is State.PLAYING
+
+    controller.set_management_mode(True)
+
+    assert ("stop",) in owntone.calls
+    assert ("clear_queue",) in owntone.calls
+    assert controller.state is State.IDLE
+    assert controller.now_playing is None
+
+
+def test_management_mode_ignores_card_removal(ctx):
+    controller, owntone, _, _ = ctx
+    controller.set_management_mode(True)
+    owntone.calls.clear()
+    controller.on_card_removed()
+    assert not any(c[0] == "pause" for c in owntone.calls)
+
+
+def test_leaving_management_mode_restores_normal_playback(ctx):
+    controller, owntone, _, _ = ctx
+    controller.set_management_mode(True)
+    controller.set_management_mode(False)
+    owntone.calls.clear()
+    controller.on_card_present("aaaa")
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+    assert controller.state is State.PLAYING
