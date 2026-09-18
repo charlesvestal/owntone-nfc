@@ -84,7 +84,21 @@ def create_app(config, controller, store) -> Flask:
             for path in root.glob("*/*")
             if path.is_dir()
         )
-        return jsonify(albums=found)
+        # Which albums already have a card. With a library far larger than the
+        # number of cards, "what still needs one" is the question being asked
+        # while registering - and assigning a second card to an album you have
+        # already done is otherwise invisible until you tap it.
+        assigned = {c.path: c.name for c in store.load().values()}
+        return jsonify(
+            albums=[
+                {"path": path,
+                 "assigned": path in assigned,
+                 "card_name": assigned.get(path)}
+                for path in found
+            ],
+            total=len(found),
+            unassigned=sum(1 for path in found if path not in assigned),
+        )
 
     @app.get("/api/cards")
     def list_cards():

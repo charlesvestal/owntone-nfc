@@ -30,9 +30,29 @@ def test_status_reports_state(app_ctx):
 
 def test_albums_are_listed_relative_to_library_root(app_ctx):
     client, _, _ = app_ctx
-    albums = client.get("/api/albums").get_json()["albums"]
-    assert "Miles Davis/Kind of Blue" in albums
-    assert "Fleetwood Mac/Rumours" in albums
+    body = client.get("/api/albums").get_json()
+    paths = [a["path"] for a in body["albums"]]
+    assert "Miles Davis/Kind of Blue" in paths
+    assert "Fleetwood Mac/Rumours" in paths
+
+
+def test_albums_report_which_ones_already_have_a_card(app_ctx):
+    # The library is far larger than the number of cards, so "what still needs
+    # one" is the question being asked while registering - and a second card
+    # on an album already done is otherwise invisible until you tap it.
+    client, _, store = app_ctx
+    store.save({"04a2b3c4": Card(uid="04a2b3c4", name="Blue",
+                                 path="Miles Davis/Kind of Blue")})
+    body = client.get("/api/albums").get_json()
+    by_path = {a["path"]: a for a in body["albums"]}
+
+    assert by_path["Miles Davis/Kind of Blue"]["assigned"] is True
+    assert by_path["Miles Davis/Kind of Blue"]["card_name"] == "Blue"
+    assert by_path["Fleetwood Mac/Rumours"]["assigned"] is False
+    assert by_path["Fleetwood Mac/Rumours"]["card_name"] is None
+
+    assert body["total"] == 2
+    assert body["unassigned"] == 1
 
 
 def test_post_card_saves_mapping(app_ctx):
