@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 import respx
@@ -39,7 +41,9 @@ def test_set_outputs_sends_expected_body(client):
     route = respx.put(f"{BASE}/api/outputs/set").mock(return_value=httpx.Response(204))
     client.set_outputs(["2", "3"])
     assert route.called
-    assert respx.calls.last.request.read() == b'{"outputs": ["2", "3"]}'
+    # Assert the decoded payload, not byte-level formatting: how the JSON
+    # serialiser spaces its separators is not part of the contract.
+    assert json.loads(respx.calls.last.request.read()) == {"outputs": ["2", "3"]}
 
 
 @respx.mock

@@ -5,7 +5,6 @@ OwnTone endpoints.
 """
 from __future__ import annotations
 
-import json
 
 import httpx
 
@@ -42,12 +41,7 @@ class OwnTone:
 
     def set_outputs(self, output_ids: list[str]) -> None:
         """Select exactly these outputs; OwnTone deselects all others."""
-        self._request(
-            "PUT",
-            "/api/outputs/set",
-            content=json.dumps({"outputs": output_ids}).encode(),
-            headers={"Content-Type": "application/json"},
-        )
+        self._request("PUT", "/api/outputs/set", json={"outputs": output_ids})
 
     # --- playback -------------------------------------------------------------
 
