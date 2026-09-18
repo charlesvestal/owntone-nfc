@@ -70,32 +70,28 @@ to keep saying "I am still here".
 separately from the DIP switches. For UART both go to **L**. Get the switches
 right and the jumpers wrong and the reader sits there silent.
 
-**Leave `RSTPDN` jumpered to `D20`.** It looks like a vestigial jumper and it
-is not: killing the service mid-transaction leaves the PN532 out of frame sync,
-after which *every* attempt to open it fails forever and reopening the port
-never recovers it. Pulsing that reset line is the only fix, and the service
-does it automatically after two consecutive failures.
+**Leave `RSTPDN` jumpered to `D20`.** The service pulses that line to reset the
+PN532 when it stops responding, which a restart can cause. Without the jumper a
+wedged reader needs a power cycle.
 
 `provision.sh` handles the Pi side: freeing the serial console and putting the
 real PL011 UART on GPIO14/15 (the mini-UART's baud rate drifts with the VPU
 clock and gives a reader that works only intermittently).
 
-### A note on card types
+### Card types
 
-**Card technology matters more than you would expect.** A 7-byte NTAG213
-reports its presence continuously. A 4-byte Mifare-Classic-style card, sitting
-motionless on the same reader, reported present for **8 milliseconds at a time,
-725 times in 25 seconds** - because `nfcpy` re-selects the tag to check, and
-that re-select fails for that type. Both work here, because presence is
-debounced in software, but it is why `presence_debounce_s` exists and why you
-should measure with the *worst* card you own rather than the first one to hand.
-`spikes/presence_check.py` does that measurement.
+Different tags report presence very differently — some continuously, some in
+bursts of a few milliseconds. Presence is debounced in software to cope, tuned
+by `presence_debounce_s`.
+
+If cards stutter or fail to play, measure yours with
+`spikes/presence_check.py` and raise that value. Measure with your least
+reliable card, not the first one to hand.
 
 ### If it goes in an enclosure
 
-Check Wi-Fi **in its final position before** building everything else. Ten
-minutes of measuring saves an evening: see the runbook's Wi-Fi section, which
-opens with the router setting that matters most.
+Test networking in its final position before assembling everything. A Pi's
+internal antenna has little margin.
 
 ## Getting started
 
@@ -121,22 +117,19 @@ remembers them.
 - **[`docs/superpowers/specs/`](docs/superpowers/specs/)** — the design, and
   what hardware testing proved wrong about it.
 
-## Three things that will bite you
-
-**Keep 5 GHz off the DFS channels.** Routers love to auto-select channels
-100–140, which are radar-protected. On those a client may not probe actively -
-it must passively wait for a beacon - and at marginal signal it associates,
-reports "connected", and then never completes DHCP. The box looks perfectly
-healthy from the inside and is invisible from the network. Moving to channel 36
-took receive from 6 Mbit/s to 325 in the same enclosure. Check this first.
-
-**Wi-Fi power save must be off.** With it on, the Pi associates, transmits at
-260 Mbit/s, receives at 6 Mbit/s, and silently drops off the network. It looks
-like a dead router. `provision.sh` handles it.
+## Two things specific to this stack
 
 **`user_agent = "AirPlay/999.0.0"` is required in `owntone.conf`.** Apple OS 27
-gates `GET /info` on the User-Agent and returns 403 to OwnTone's default, before
-any authentication. Without it, every Apple speaker stops working as it updates.
+gates `GET /info` on the User-Agent and returns 403 to OwnTone's default, so
+AirPlay speakers stop working as they update. `provision.sh` sets it. Upstream:
+[owntone#2042](https://github.com/owntone/owntone-server/issues/2042).
+
+**Album ordering is done client-side.** OwnTone's expression grammar accepts
+one sort field, so a multi-disc album can't be ordered by the server. Tracks are
+fetched, sorted on `(disc, track)`, and queued by explicit URI.
+
+Environment-specific gotchas — networking, enclosures, recovery — are in
+[`docs/runbook.md`](docs/runbook.md).
 
 ## Development
 
