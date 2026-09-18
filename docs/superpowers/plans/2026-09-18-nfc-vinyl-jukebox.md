@@ -372,9 +372,9 @@ These run before any application code exists. They are deliberately first: each 
 invalidate a design assumption, and finding that out now costs an evening instead of a
 rewrite.
 
-### Task 4: Spike 0 — can OwnTone drive the HomePods?
+### Task 4: Spike 0 — prove the AirPlay send path (Mac first, then HomePods)
 
-**Goal:** Prove OwnTone can select and play to the HomePod stereo pair, given the pair is associated with an Apple TV.
+**Goal:** Prove OwnTone can select and play to an AirPlay 2 receiver — staged: the Mac as a positive control, then the HomePod stereo pair.
 
 > **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it "verified inline", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.
 
@@ -387,7 +387,16 @@ OwnTone's docs, and the one builder who documented a Phoniebox+HomePod setup rep
 exactly this configuration as the case that failed. Every remaining task assumes AirPlay
 output works.
 
+**Why stage it through the Mac.** Testing against the Mac separates "can OwnTone send
+AirPlay at all" from "will this particular Apple TV / HomePod arrangement cooperate" —
+two failures that look identical from the Pi.
+
+**Read the stages asymmetrically.** A Mac success proves the send path works end to end.
+A Mac *failure* does **not** predict HomePod failure — they are different authentication
+paths. Never abandon the design on a Stage A failure alone; always run Stage B.
+
 **Acceptance Criteria:**
+- [ ] **Stage A:** the Mac appears as an `airplay` output and plays audibly
 - [ ] `GET /api/outputs` lists the HomePod pair as an output with `"type": "airplay"`
 - [ ] Selecting that output and playing a track produces **audible sound from the HomePods**
 - [ ] Playback survives 60 seconds without the output deselecting itself
@@ -397,6 +406,41 @@ output works.
 **Verify:** `curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool | grep -A3 airplay` → HomePod output present with `"selected": true` during playback
 
 **Steps:**
+
+#### Stage A — the Mac as a positive control
+
+- [ ] **Step A1: Configure the Mac's AirPlay receiver correctly**
+
+*System Settings → General → AirDrop & Handoff → AirPlay Receiver*:
+
+- **Allow AirPlay for: "Anyone on the Same Network"** — not "Current User". The Pi is not
+  signed into your Apple ID, so "Current User" makes it invisible.
+- **"Require password": OFF.** This is not optional. OwnTone cannot send an AirPlay
+  password — [issue #1385](https://github.com/owntone/owntone-server/issues/1385), still
+  open — and fails with a 500 and `requires a valid PIN or password` in the log. Leaving
+  this on produces a failure that has nothing to do with your speakers.
+
+- [ ] **Step A2: Confirm the Mac appears and plays**
+
+```bash
+curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool | grep -B2 -A3 airplay
+MAC=$(curl -s http://jukebox.local:3689/api/outputs \
+  | python3 -c "import sys,json; print([o['id'] for o in json.load(sys.stdin)['outputs'] if o['type']=='airplay'][0])")
+curl -s -X PUT -H 'Content-Type: application/json' \
+  -d "{\"outputs\":[\"$MAC\"]}" http://jukebox.local:3689/api/outputs/set
+curl -s -X POST "http://jukebox.local:3689/api/queue/items/add?expression=media_kind+is+music&limit=1&clear=true&playback=start"
+```
+
+Expected: audible music from the Mac's speakers. Approve the pairing prompt if one
+appears — the Mac raises one on each reconnect, which is normal and not a HomePod signal.
+
+- [ ] **Step A3: Record the outcome**
+
+If Stage A passes, the OwnTone AirPlay send path is proven and any Stage B failure is
+specific to the Apple TV / HomePod arrangement. Note that distinction in the runbook —
+it is what tells you which fallback to reach for.
+
+#### Stage B — the HomePods
 
 - [ ] **Step 1: Fix the Apple-side permission FIRST**
 
@@ -477,7 +521,7 @@ git commit -m "docs: record Spike 0 HomePod reachability results"
 ```
 
 ```json:metadata
-{"userGate": true, "tags": ["user-gate", "spike"], "gateScope": "blocks-all-downstream", "verifyCommand": "curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool", "acceptanceCriteria": ["airplay output listed", "audible sound from HomePods", "survives 60s without deselecting", "deselect releases the HomePods", "config recorded in runbook"], "modelTier": "standard"}
+{"userGate": true, "tags": ["user-gate", "spike"], "gateScope": "blocks-all-downstream", "verifyCommand": "curl -s http://jukebox.local:3689/api/outputs | python3 -m json.tool", "acceptanceCriteria": ["Stage A: Mac plays audibly as an airplay output", "airplay output listed for HomePods", "audible sound from HomePods", "survives 60s without deselecting", "deselect releases the HomePods", "config recorded in runbook"], "requireEvidenceTokens": [["stage-a", "mac-receiver"], ["stage-b", "homepod"]], "modelTier": "standard"}
 ```
 
 ---
