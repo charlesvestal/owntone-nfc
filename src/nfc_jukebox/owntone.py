@@ -25,7 +25,13 @@ DEFAULT_TIMEOUT_S = 3.0
 # than the previous one but still a guess about runtime behaviour. Spike 1 is
 # what turns this comment into a fact, and this is the single place to change
 # if it finds otherwise.
-ALBUM_EXPRESSION = 'path includes "{path}" order by path asc'
+# Ordering is deliberately absent: it is done client-side in play_album,
+# because OwnTone accepts only one sort field and a multi-disc album needs two.
+ALBUM_EXPRESSION = 'path includes "{path}"'
+
+# Upper bound on tracks fetched for one album. Generous - the longest boxed set
+# here is 22 - but bounded so a mistyped path cannot pull the whole library.
+MAX_ALBUM_TRACKS = 500
 
 # `type` is the `.name` field of OwnTone's `struct output_definition`
 # (src/outputs/*.c): "AirPlay 2" (airplay.c), "AirPlay 1" (raop.c),
@@ -140,17 +146,42 @@ class OwnTone:
         self.repeat("off")
 
     def play_album(self, relative_path: str) -> None:
-        """Clear the queue and play the album at this library-relative path."""
+        """Clear the queue and play the album at this library-relative path.
+
+        Tracks are fetched, sorted here by (disc, track), and queued by explicit
+        URI rather than asking OwnTone to sort. That costs one extra request -
+        ~3ms on localhost - and is the only way to order a multi-disc album
+        correctly, because OwnTone's expression grammar accepts exactly ONE
+        sort field: `order by disc asc, track asc` is a syntax error.
+
+        A real example this fixes: M83's "Hurry Up, We're Dreaming" is two
+        discs flattened into one folder, so both discs have a track 1. Sorting
+        by track interleaves them; sorting by path interleaves them too, since
+        the filenames collide the same way. The tags are correct, so sorting on
+        (disc, track) is the only thing that works - and it also picks up
+        tracks stranded in a sibling folder.
+        """
+        tracks = self._request(
+            "GET", "/api/search",
+            params={"type": "tracks",
+                    "expression": ALBUM_EXPRESSION.format(
+                        path=_escape(_anchor(relative_path))),
+                    "limit": MAX_ALBUM_TRACKS},
+        ).json().get("tracks", {}).get("items", [])
+
+        if not tracks:
+            # Nothing matched. Let the caller's error handling see a normal
+            # failure rather than silently queueing an empty album.
+            raise LookupError(f"no tracks found for {relative_path!r}")
+
+        tracks.sort(key=lambda t: (t.get("disc_number") or 0,
+                                   t.get("track_number") or 0,
+                                   t.get("path") or ""))
+        uris = ",".join(t["uri"] for t in tracks if t.get("uri"))
+
         self._request(
-            "POST",
-            "/api/queue/items/add",
-            params={
-                "expression": ALBUM_EXPRESSION.format(
-                    path=_escape(_anchor(relative_path))
-                ),
-                "clear": "true",
-                "playback": "start",
-            },
+            "POST", "/api/queue/items/add",
+            params={"uris": uris, "clear": "true", "playback": "start"},
         )
 
     def play(self) -> None:
@@ -175,7 +206,8 @@ class OwnTone:
         response = self._request(
             "GET", "/api/search",
             params={"type": "albums",
-                    "expression": ALBUM_EXPRESSION.format(path=_anchor(relative_path)),
+                    "expression": ALBUM_EXPRESSION.format(
+                        path=_escape(_anchor(relative_path))),
                     "limit": 1},
         ).json()
         items = response.get("albums", {}).get("items", [])

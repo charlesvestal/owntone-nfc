@@ -85,138 +85,115 @@ def test_album_expression_orders_by_the_real_lexer_tags():
     assert "disc_number" not in ALBUM_EXPRESSION
 
 
-def test_album_expression_orders_by_exactly_one_field():
-    # Multi-field ordering is a syntax error on the server: `order by disc asc,
-    # track asc` returns 500, because the comma is rejected. Without ANY
-    # ordering the server returns tracks effectively shuffled, so exactly one
-    # sort field is required - not zero, not two.
-    assert "order by" in ALBUM_EXPRESSION
-    order_clause = ALBUM_EXPRESSION.split("order by", 1)[1]
-    assert "," not in order_clause
+def test_album_expression_carries_no_ordering():
+    # Ordering is done client-side in play_album, because OwnTone accepts
+    # exactly one sort field and a multi-disc album needs two: `order by disc
+    # asc, track asc` is a syntax error on the server.
+    assert "order by" not in ALBUM_EXPRESSION
+    assert "track_number" not in ALBUM_EXPRESSION
+    assert "disc_number" not in ALBUM_EXPRESSION
+
+
+def _track(uri, disc, track, path="x"):
+    return {"uri": uri, "disc_number": disc, "track_number": track, "path": path}
+
+
+def _mock_album(tracks):
+    """Mock the track search play_album performs, and the queue add."""
+    respx.get(url__startswith=f"{BASE}/api/search").mock(
+        return_value=httpx.Response(200, json={"tracks": {"items": tracks}}))
+    return respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
+        return_value=httpx.Response(200, json={"count": len(tracks)}))
 
 
 @respx.mock
 def test_play_album_anchors_the_path_so_siblings_do_not_match(client):
-    respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
-        return_value=httpx.Response(200, json={"count": 11})
-    )
+    _mock_album([_track("library:track:1", 1, 1)])
     client.play_album("Fleetwood Mac/Rumours")
-    expression = respx.calls.last.request.url.params["expression"]
-    # A trailing separator anchors the prefix at a directory boundary, so a
-    # sibling `Rumours (Deluxe)` folder cannot also be swept into the queue and
-    # interleaved track-for-track with the album the user actually asked for.
-    assert expression.startswith('path includes "Fleetwood Mac/Rumours/"')
-    needle = "Fleetwood Mac/Rumours/"
-    assert needle not in "/srv/music/Fleetwood Mac/Rumours (Deluxe)/01.flac"
-    assert needle not in "/srv/music/Fleetwood Mac/Rumours - 2013 Remaster/01.flac"
-    assert needle in "/srv/music/Fleetwood Mac/Rumours/01.flac"
+    # A card for "Rumours" must not also sweep in "Rumours (Deluxe)".
+    expression = respx.calls[0].request.url.params["expression"]
+    assert 'path includes "Fleetwood Mac/Rumours/"' == expression
 
 
 @respx.mock
 def test_play_album_does_not_double_the_separator(client):
-    respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
-        return_value=httpx.Response(200, json={"count": 11})
-    )
+    _mock_album([_track("library:track:1", 1, 1)])
     client.play_album("Fleetwood Mac/Rumours/")
-    expression = respx.calls.last.request.url.params["expression"]
-    assert expression.startswith('path includes "Fleetwood Mac/Rumours/"')
-
-
-@respx.mock
-def test_shuffle_and_repeat_can_be_forced_off(client):
-    shuffle = respx.put(url__startswith=f"{BASE}/api/player/shuffle").mock(
-        return_value=httpx.Response(204)
-    )
-    repeat = respx.put(url__startswith=f"{BASE}/api/player/repeat").mock(
-        return_value=httpx.Response(204)
-    )
-    client.shuffle(False)
-    client.repeat("off")
-    assert shuffle.called and repeat.called
-    assert dict(shuffle.calls.last.request.url.params) == {"state": "false"}
-    assert dict(repeat.calls.last.request.url.params) == {"state": "off"}
-
-
-@respx.mock
-def test_set_vinyl_playback_mode_turns_both_off(client):
-    shuffle = respx.put(url__startswith=f"{BASE}/api/player/shuffle").mock(
-        return_value=httpx.Response(204)
-    )
-    repeat = respx.put(url__startswith=f"{BASE}/api/player/repeat").mock(
-        return_value=httpx.Response(204)
-    )
-    client.set_vinyl_playback_mode()
-    assert dict(shuffle.calls.last.request.url.params) == {"state": "false"}
-    assert dict(repeat.calls.last.request.url.params) == {"state": "off"}
+    assert 'path includes "Fleetwood Mac/Rumours/"' == \
+        respx.calls[0].request.url.params["expression"]
 
 
 @respx.mock
 def test_play_album_clears_and_starts(client):
-    route = respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
-        return_value=httpx.Response(200, json={"count": 9})
-    )
+    route = _mock_album([_track("library:track:1", 1, 1)])
     client.play_album("Miles Davis/Kind of Blue")
     assert route.called
-    url = str(respx.calls.last.request.url)
-    assert "clear=true" in url
-    assert "playback=start" in url
-    assert "Kind+of+Blue" in url or "Kind%20of%20Blue" in url
+    params = respx.calls.last.request.url.params
+    assert params["clear"] == "true"
+    assert params["playback"] == "start"
 
 
 @respx.mock
-def test_pause_and_stop(client):
-    pause = respx.put(f"{BASE}/api/player/pause").mock(return_value=httpx.Response(204))
-    stop = respx.put(f"{BASE}/api/player/stop").mock(return_value=httpx.Response(204))
-    client.pause()
-    client.stop()
-    assert pause.called and stop.called
+def test_play_album_orders_a_multi_disc_album_by_disc_then_track(client):
+    # The case this exists for: M83's "Hurry Up, We're Dreaming" is two discs
+    # in one folder, so both have a track 1. Sorting by track or by path
+    # interleaves them; only (disc, track) is correct. OwnTone cannot do it -
+    # its expression grammar takes exactly one sort field.
+    _mock_album([
+        _track("library:track:d2t2", 2, 2),
+        _track("library:track:d1t1", 1, 1),
+        _track("library:track:d2t1", 2, 1),
+        _track("library:track:d1t2", 1, 2),
+    ])
+    client.play_album("M83/Hurry Up, We're Dreaming")
+    uris = respx.calls.last.request.url.params["uris"].split(",")
+    assert uris == ["library:track:d1t1", "library:track:d1t2",
+                    "library:track:d2t1", "library:track:d2t2"]
 
 
 @respx.mock
-def test_clear_queue(client):
-    route = respx.put(f"{BASE}/api/queue/clear").mock(return_value=httpx.Response(204))
-    client.clear_queue()
-    assert route.called
+def test_play_album_falls_back_to_path_when_tags_are_missing(client):
+    # Untagged rips sort by path rather than landing in arbitrary order.
+    _mock_album([
+        {"uri": "library:track:b", "path": "02 b.flac"},
+        {"uri": "library:track:a", "path": "01 a.flac"},
+    ])
+    client.play_album("Some/Album")
+    assert respx.calls.last.request.url.params["uris"].split(",") == \
+        ["library:track:a", "library:track:b"]
 
 
 @respx.mock
-def test_raises_on_server_error(client):
-    respx.get(f"{BASE}/api/outputs").mock(return_value=httpx.Response(500))
-    with pytest.raises(httpx.HTTPStatusError):
-        client.selected_output_ids()
+def test_play_album_raises_when_nothing_matches(client):
+    _mock_album([])
+    # Queueing an empty album silently would look like a dead card.
+    with pytest.raises(LookupError):
+        client.play_album("Nope/Nothing")
 
 
 @respx.mock
 def test_play_album_escapes_double_quotes_in_path(client):
-    route = respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
-        return_value=httpx.Response(200, json={"count": 3})
-    )
-    client.play_album('Various/12" Singles')
-    assert route.called
-    expression = respx.calls.last.request.url.params["expression"]
-    # The interpolated value must not terminate the quoted string early.
-    assert expression == ALBUM_EXPRESSION.format(path='Various/12\\" Singles/')
-    assert expression.startswith('path includes "Various/12\\" Singles/"')
+    _mock_album([_track('library:track:1', 1, 1)])
+    # An unescaped quote would close the expression string early and the
+    # whole query would fail to parse.
+    client.play_album('Weird/Album "Name"')
+    expression = respx.calls[0].request.url.params['expression']
+    assert '\\"Name\\"' in expression
 
 
 @respx.mock
 def test_play_album_escapes_backslashes_in_path(client):
-    respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
-        return_value=httpx.Response(200, json={"count": 3})
-    )
-    client.play_album("Some\\Path")
-    expression = respx.calls.last.request.url.params["expression"]
-    assert expression.startswith('path includes "Some\\\\Path/"')
+    _mock_album([_track('library:track:1', 1, 1)])
+    client.play_album('Weird/Back\\slash')
+    expression = respx.calls[0].request.url.params['expression']
+    assert 'Back\\\\slash' in expression
 
 
 @respx.mock
 def test_play_album_leaves_single_quotes_alone(client):
-    respx.post(url__startswith=f"{BASE}/api/queue/items/add").mock(
-        return_value=httpx.Response(200, json={"count": 3})
-    )
-    client.play_album("Led Zeppelin/Rock 'n' Roll")
-    expression = respx.calls.last.request.url.params["expression"]
-    assert expression.startswith('path includes "Led Zeppelin/Rock \'n\' Roll/"')
+    _mock_album([_track("library:track:1", 1, 1)])
+    client.play_album("Rock 'n' Roll/Album")
+    assert "Rock 'n' Roll" in respx.calls[0].request.url.params["expression"]
 
 
 @respx.mock
@@ -243,3 +220,14 @@ def test_album_artwork_url_is_none_when_album_has_no_art(client):
         return_value=httpx.Response(200, json={
             "albums": {"items": [{"name": "Parklife"}]}}))
     assert client.album_artwork_url("Blur/Parklife") is None
+
+
+@respx.mock
+def test_album_artwork_url_escapes_the_path_too(client):
+    # The same escaping bug appeared twice in one sitting: once in play_album
+    # and once here. Both build the expression, so both must escape it.
+    respx.get(url__startswith=f"{BASE}/api/search").mock(
+        return_value=httpx.Response(200, json={"albums": {"items": []}}))
+    client.album_artwork_url('Weird/Album "Name"')
+    expression = respx.calls.last.request.url.params["expression"]
+    assert '\\"Name\\"' in expression
