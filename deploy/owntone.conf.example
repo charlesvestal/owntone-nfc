@@ -1,4 +1,5 @@
 general {
+	user_agent = "AirPlay/999.0.0"
 	ipv6 = no
 	uid = "root"
 	logfile = "/var/log/owntone.log"
@@ -28,12 +29,27 @@ streaming {
 
 # --- Notes on the non-default settings above -------------------------------
 #
+# user_agent = "AirPlay/999.0.0"      <-- REQUIRED for Apple OS 27 devices
+#   OS 27 (HomePod / tvOS / macOS, AirTunes srcvers 980.x) gates GET /info on
+#   the User-Agent header and rejects OwnTone's default with 403 - BEFORE any
+#   authentication, so no amount of pairing or Home-app permission fixes it.
+#   Upstream: owntone/owntone-server issue #2042.
+#
+#   Proven on this network, same device and URL, only the header differing:
+#       default UA        -> 403
+#       AirPlay/999.0.0   -> 200
+#
+#   Without this, every Apple device breaks as it updates to 27. Observed here:
+#   Apple TV worked on tvOS 26.6 and returned 403 immediately after updating to
+#   27.0; both Macs on macOS 27 refused from the start (403 even over loopback);
+#   the HomePods kept working only because they were still on 26.6.
+#   999.0.0 is the maintainer's suggestion, chosen to stay valid indefinitely.
+#
 # start_buffer_ms = 500
-#   OwnTone's default is 2250ms, sized for AirPlay hardware from the 2000s.
-#   Measured on this box: it is the ENTIRE card-tap-to-audio delay for local
-#   playback - 2300ms before, 550ms after, with every API call around it
-#   costing only 2-3ms. Verified safe for the HomePods: no underruns, no
-#   resyncs, outputs stayed selected through playback.
+#   OwnTone's default is 2250ms, sized for AirPlay hardware from the 2000s, and
+#   it was the ENTIRE card-tap-to-audio delay for local playback: 2300ms before,
+#   550ms after, with every API call around it costing only 2-3ms. Verified safe
+#   for the HomePods - no underruns, no resyncs.
 #
 #   HomePods still take ~2080ms regardless, because that is the AirPlay 2 PTP
 #   handshake rather than buffering. That measurement is why the jukebox holds
