@@ -9,7 +9,7 @@ def test_defaults_when_file_missing(tmp_path):
     cfg = Config.load(tmp_path / "nope.yaml")
     assert cfg.owntone_url == "http://127.0.0.1:3689"
     assert cfg.library_root == Path("/srv/music")
-    assert cfg.grace_period_s == 90.0
+    assert cfg.grace_period_s == Config().grace_period_s
 
 
 def test_reads_values_from_yaml(tmp_path):
@@ -79,7 +79,7 @@ def test_non_numeric_float_field_falls_back_to_its_default(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         cfg = Config.load(path)
     # A bad field costs that field, not the whole file.
-    assert cfg.grace_period_s == 90.0
+    assert cfg.grace_period_s == Config().grace_period_s
     assert isinstance(cfg.grace_period_s, float)
     assert cfg.owntone_url == "http://pi:3689"
     assert "grace_period_s" in caplog.text
@@ -116,8 +116,8 @@ def test_negative_timings_fall_back_to_defaults(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("grace_period_s: -5\nbump_window_s: -1\n")
     cfg = Config.load(path)
-    assert cfg.grace_period_s == 90.0
-    assert cfg.bump_window_s == 0.5
+    assert cfg.grace_period_s == Config().grace_period_s
+    assert cfg.bump_window_s == Config().bump_window_s
 
 
 def test_non_string_url_falls_back_to_default(tmp_path):
@@ -144,5 +144,5 @@ def test_non_finite_timing_falls_back_to_default(tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("grace_period_s: .nan\nbump_window_s: .inf\n")
     cfg = Config.load(path)
-    assert cfg.grace_period_s == 90.0
-    assert cfg.bump_window_s == 0.5
+    assert cfg.grace_period_s == Config().grace_period_s
+    assert cfg.bump_window_s == Config().bump_window_s
