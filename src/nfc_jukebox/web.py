@@ -5,6 +5,7 @@ Deliberately tiny: OwnTone's UI on :3689 owns everything player-related.
 from __future__ import annotations
 
 import logging
+import time
 import threading
 from pathlib import Path
 
@@ -19,6 +20,27 @@ log = logging.getLogger(__name__)
 
 
 def create_app(config, controller, store, owntone=None) -> Flask:
+    # Where sound will come out. Polled once a second by the page, so cached
+    # briefly rather than asking OwnTone every time - the answer changes only
+    # when someone picks different speakers.
+    _outputs_cache: dict = {"at": 0.0, "value": None}
+    _OUTPUTS_TTL_S = 3.0
+
+    def selected_outputs():
+        if owntone is None:
+            return None
+        now = time.monotonic()
+        if _outputs_cache["value"] is not None and now - _outputs_cache["at"] < _OUTPUTS_TTL_S:
+            return _outputs_cache["value"]
+        try:
+            names = [o["name"] for o in owntone.outputs() if o.get("selected")]
+        except Exception:
+            log.warning("Could not read outputs from OwnTone", exc_info=True)
+            return _outputs_cache["value"]
+        _outputs_cache["at"] = now
+        _outputs_cache["value"] = names
+        return names
+
     app = Flask(__name__)
     # add_card and delete_card are read-modify-write over one YAML file, and
     # Flask serves requests from several threads. Without this, two people
@@ -75,6 +97,7 @@ def create_app(config, controller, store, owntone=None) -> Flask:
             last_seen_name=card.name if card else None,
             last_seen_path=card.path if card else None,
             management_mode=controller.management_mode,
+            outputs=selected_outputs(),
         )
 
     @app.put("/api/management")
