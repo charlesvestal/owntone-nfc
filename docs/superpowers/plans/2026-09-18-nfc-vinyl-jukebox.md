@@ -1894,6 +1894,11 @@ git commit -m "feat: add vinyl state machine with grace period and output restor
 
 ### Task 13: Entrypoint and systemd service
 
+> **Ordering correction:** implement **Task 14 (web admin) BEFORE this task.**
+> `__main__.py` imports `create_app` from `web.py`, so building this first leaves an
+> entrypoint that cannot run. The numbering here reflects the original draft order; the
+> dependency graph is the authority.
+
 **Goal:** The service runs on boot, wires reader to controller, and ticks the grace timer.
 
 **Files:**
