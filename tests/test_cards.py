@@ -57,3 +57,69 @@ def test_malformed_entry_does_not_lose_the_whole_registry(tmp_path, caplog):
     logged = caplog.text
     for uid in ("deadbeef", "cafebabe", "badbad01", "badbad02"):
         assert uid in logged
+
+
+def test_corrupt_file_degrades_to_empty_instead_of_raising(tmp_path, caplog):
+    path = tmp_path / "cards.yaml"
+    path.write_text("04a2b3c4:\n  name: [unclosed\n")
+    store = CardStore(path)
+    with caplog.at_level(logging.ERROR):
+        assert store.load() == {}
+    assert "cards.yaml" in caplog.text
+
+
+def test_corrupt_file_is_preserved_aside_not_overwritten(tmp_path):
+    path = tmp_path / "cards.yaml"
+    original = "04a2b3c4:\n  name: [unclosed\n"
+    path.write_text(original)
+    store = CardStore(path)
+    store.load()
+    salvaged = list(tmp_path.glob("cards.yaml.corrupt*"))
+    assert len(salvaged) == 1
+    assert salvaged[0].read_text() == original
+    # The bad file is out of the way, so the next tap does not re-explode.
+    assert not path.exists()
+    assert store.load() == {}
+
+
+def test_truncated_zero_length_file_loads_as_empty(tmp_path):
+    path = tmp_path / "cards.yaml"
+    path.write_text("")
+    assert CardStore(path).load() == {}
+    # Empty is not corrupt: nothing to preserve.
+    assert list(tmp_path.glob("cards.yaml.corrupt*")) == []
+
+
+def test_top_level_scalar_is_treated_as_corrupt(tmp_path):
+    path = tmp_path / "cards.yaml"
+    path.write_text("just a string\n")
+    store = CardStore(path)
+    assert store.load() == {}
+    assert len(list(tmp_path.glob("cards.yaml.corrupt*"))) == 1
+
+
+def test_unreadable_file_degrades_to_empty(tmp_path, monkeypatch):
+    path = tmp_path / "cards.yaml"
+    path.write_text("04a2b3c4:\n  name: X\n  path: A/B\n")
+    store = CardStore(path)
+
+    def boom(*args, **kwargs):
+        raise PermissionError(13, "nope")
+
+    monkeypatch.setattr(CardStore, "_read", staticmethod(boom))
+    assert store.load() == {}
+    # An OS-level read failure must not destroy the registry.
+    assert path.exists()
+
+
+def test_get_on_corrupt_file_returns_none(tmp_path):
+    path = tmp_path / "cards.yaml"
+    path.write_text("04a2b3c4:\n  name: [unclosed\n")
+    assert CardStore(path).get("04a2b3c4") is None
+
+
+def test_save_leaves_no_temp_file_behind(tmp_path):
+    path = tmp_path / "cards.yaml"
+    store = CardStore(path)
+    store.save({"04a2b3c4": Card(uid="04a2b3c4", name="X", path="A/B")})
+    assert [p.name for p in tmp_path.iterdir()] == ["cards.yaml"]
