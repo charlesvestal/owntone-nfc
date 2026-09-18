@@ -6,3 +6,6 @@ venv/
 *.egg-info/
 .pytest_cache/
 .DS_Store
+
+# Backups contain the card registry and config; keep them out of git.
+backups/
