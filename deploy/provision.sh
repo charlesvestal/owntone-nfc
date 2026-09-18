@@ -59,8 +59,12 @@ say "OwnTone"
 if ! command -v owntone >/dev/null; then
   wget -q -O - https://raw.githubusercontent.com/owntone/owntone-apt/refs/heads/master/repo/rpi/owntone.gpg \
     | gpg --dearmor --output /usr/share/keyrings/owntone-archive-keyring.gpg
+  # Match the running release rather than hardcoding one: OwnTone publishes
+  # bookworm, trixie and others, and this box may be reflashed onto a newer
+  # image to chase a Wi-Fi firmware fix.
+  CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
   wget -q -O /etc/apt/sources.list.d/owntone.list \
-    https://raw.githubusercontent.com/owntone/owntone-apt/refs/heads/master/repo/rpi/owntone-bookworm.list
+    "https://raw.githubusercontent.com/owntone/owntone-apt/refs/heads/master/repo/rpi/owntone-${CODENAME}.list"
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y owntone
 fi

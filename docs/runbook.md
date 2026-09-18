@@ -19,8 +19,12 @@ what you want when something is broken or you are rebuilding.
 
 ## Hardware
 
-**Raspberry Pi 4**, Raspberry Pi OS **Bookworm** Lite 64-bit. Not Trixie — the
-Imager defaults to it, and Bookworm was chosen for PN532 library maturity.
+**Raspberry Pi 4**, Raspberry Pi OS Lite 64-bit.
+
+Bookworm was originally chosen because Phoniebox required it. **Phoniebox is
+not used**, so that constraint does not apply and a newer release is fine -
+`provision.sh` reads the codename from `/etc/os-release` and picks the matching
+OwnTone repository, which publishes both bookworm and trixie.
 
 **Waveshare PN532 NFC HAT**, on the GPIO header, **UART mode**:
 
@@ -81,6 +85,38 @@ new information.
 **macOS is not usable as a test receiver** — macOS 27 returns 403 to an
 unauthenticated `/info` probe even over loopback.
 
+## Wi-Fi: this Pi 4 cannot see 2.4 GHz
+
+Unexplained and worth knowing before diagnosing anything else. This board:
+
+- sees 5 GHz networks fine, including neighbours at signal 20 (very weak)
+- sees **zero** 2.4 GHz networks, ever
+- fails a *directed* probe for an SSID confirmed to be broadcasting on
+  channel 1 with six clients connected
+- reports both bands supported and channels 1-13 enabled at 20 dBm
+- loads firmware cleanly with no errors in `dmesg`
+
+So it is 5 GHz-only in practice, on DFS channel 100, with no fallback band.
+Bare on a bench that is fine (-57 dBm, rx 433 Mbit/s). Inside a plastic
+enclosure it drops to about -68 to -70 dBm and the receive rate collapses to
+6 Mbit/s while transmit stays healthy - DHCP then never completes and the box
+silently vanishes from the network.
+
+Note the failure is binary, not gradual: rx is either ~400 Mbit/s or 6. The
+same signature appeared with Wi-Fi power save enabled.
+
+Things tried that did NOT fix it: disabling power save (necessary but not
+sufficient here), pinning the BSSID to the stronger AP, forcing the 2.4 GHz
+band, a static IP, `ipv4.may-fail no`.
+
+Options if it recurs, cheapest first:
+1. A USB Wi-Fi adapter with an external antenna - gets the antenna out of the
+   enclosure rather than fighting it, and restores 2.4 GHz. The reliable fix.
+2. Reflash onto a newer Raspberry Pi OS, in case the 2.4 GHz fault is the
+   August 2023 firmware blob.
+3. A different board. The Pi 3B is 2.4 GHz-only, which penetrates an enclosure
+   better - but it is slower, and bets on 2.4 working.
+
 ## Common failures
 
 | Symptom | Cause | Fix |
@@ -132,7 +168,7 @@ space once you are happy with the NAS.
 ## Rebuilding onto a new SD card
 
 1. `sudo bash deploy/backup.sh` on the old card; copy the archive off.
-2. Burn Raspberry Pi OS **Bookworm** Lite 64-bit. In Imager's settings: hostname
+2. Burn Raspberry Pi OS Lite 64-bit. In Imager's settings: hostname
    `jukebox`, SSH with your public key, user `pi`, Wi-Fi, locale.
 3. `git clone` this repo to `/home/pi/owntone-nfc`.
 4. `sudo bash deploy/provision.sh`
