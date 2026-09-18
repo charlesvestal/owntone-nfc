@@ -450,3 +450,205 @@ def test_release_failure_does_not_escape(ctx):
     controller.tick()
     assert controller.last_error is not None
     assert controller.state is State.IDLE
+
+
+# --- output verification ---------------------------------------------------
+#
+# Every synchronous call at card-tap time can succeed and the box can still end
+# up playing to the wrong speaker: an AirPlay 2 HomePod refuses pairing several
+# seconds later, deselects itself, and OwnTone quietly falls back to the local
+# soundcard. `state=play`, `last_error=None`, and the user is listening to the
+# wrong thing. These tests pin the after-the-fact check that notices.
+
+
+def _start_with_both_outputs(ctx):
+    """Start an album with local + AirPlay selected, as the snapshot asks."""
+    controller, owntone, snapshot, clock = ctx
+    snapshot.save(["1", "2"])
+    controller.on_card_present("aaaa")
+    assert owntone.selected_output_ids() == ["1", "2"]
+    assert controller.last_error is None
+    return controller, owntone, snapshot, clock
+
+
+def test_intended_output_deselected_after_start_is_reported(ctx):
+    """The observed defect: the HomePod deselects itself post-pairing and
+    OwnTone falls back to local. Nothing synchronous can see it."""
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+
+    owntone.outputs[1]["selected"] = False  # pairing refused, seconds later
+
+    clock.advance(30.0)
+    controller.tick()
+
+    assert controller.state is State.PLAYING  # audio *is* playing, just wrong
+    assert controller.last_error is not None
+    assert "2" in controller.last_error
+
+
+def test_intended_output_vanishing_after_start_is_reported(ctx):
+    """An output gone from /api/outputs entirely is a different fault from one
+    still listed and deselected, and must say so."""
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+
+    del owntone.outputs[1]  # HomePod dropped off the network altogether
+
+    clock.advance(30.0)
+    controller.tick()
+
+    assert controller.last_error is not None
+    assert "2" in controller.last_error
+    assert "no longer" in controller.last_error
+
+
+def test_a_user_switching_speakers_mid_album_is_not_an_error(ctx):
+    """Changing outputs in OwnTone's own web UI is a deliberate act. Picking a
+    speaker we did not ask for is the fingerprint of a human doing it."""
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+    owntone.outputs.append({"id": "7", "type": "Chromecast", "selected": False})
+
+    owntone.set_outputs(["7"])  # user moves the record to the Chromecast
+
+    clock.advance(30.0)
+    controller.tick()
+
+    assert controller.last_error is None
+    assert controller.state is State.PLAYING
+
+
+def test_a_user_switch_replaces_what_we_expect_to_stay_selected(ctx):
+    """Having adopted the user's choice, we watch *that* instead."""
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+    owntone.outputs.append({"id": "7", "type": "Chromecast", "selected": False})
+
+    owntone.set_outputs(["7"])
+    clock.advance(30.0)
+    controller.tick()
+    assert controller.last_error is None
+
+    owntone.outputs[2]["selected"] = False  # now the Chromecast drops
+    clock.advance(30.0)
+    controller.tick()
+
+    assert controller.last_error is not None
+    assert "7" in controller.last_error
+
+
+def test_a_mismatch_is_reported_once_not_every_tick(ctx):
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+    owntone.outputs[1]["selected"] = False
+
+    clock.advance(30.0)
+    controller.tick()
+    assert controller.last_error is not None
+
+    controller.last_error = None
+    for _ in range(5):
+        clock.advance(30.0)
+        controller.tick()
+
+    assert controller.last_error is None
+
+
+def test_outputs_are_not_polled_on_every_tick(ctx):
+    """One HTTP round trip per second, forever, for a box that sits idle-ish
+    all evening. The check is periodic, not per-tick."""
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+    owntone.outputs[1]["selected"] = False
+
+    polls = []
+    real = owntone.selected_output_ids
+    owntone.selected_output_ids = lambda: (polls.append(1), real())[1]
+
+    for _ in range(10):
+        clock.advance(1.0)
+        controller.tick()
+
+    assert len(polls) <= 1
+
+
+def test_a_new_card_resets_the_intended_outputs(ctx):
+    controller, owntone, snapshot, clock = _start_with_both_outputs(ctx)
+    owntone.outputs[1]["selected"] = False
+    clock.advance(30.0)
+    controller.tick()
+    assert controller.last_error is not None
+
+    controller.on_card_present("bbbb")  # fresh record, outputs re-selected
+    assert controller.last_error is None
+    assert owntone.selected_output_ids() == ["1", "2"]
+
+    owntone.outputs[1]["selected"] = False  # and it drops out again
+    clock.advance(30.0)
+    controller.tick()
+
+    assert controller.last_error is not None
+    assert "2" in controller.last_error
+
+
+def test_no_output_check_once_the_record_is_released(ctx):
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+    controller.on_card_removed()
+    clock.advance(91.0)
+    controller.tick()  # grace expiry: stop, clear, back to local
+    assert controller.state is State.IDLE
+    controller.last_error = None
+
+    polls = []
+    real = owntone.selected_output_ids
+    owntone.selected_output_ids = lambda: (polls.append(1), real())[1]
+    clock.advance(30.0)
+    controller.tick()
+
+    assert polls == []
+    assert controller.last_error is None
+
+
+def test_a_failed_output_check_does_not_escape(ctx):
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+    owntone.selected_output_ids = _boom
+
+    clock.advance(30.0)
+    controller.tick()
+
+    assert controller.last_error is not None
+    assert controller.state is State.PLAYING
+
+
+def test_a_hand_picked_output_is_watched_too(ctx):
+    """The guard rail means we never wrote a selection; the thing the user
+    chose by hand is still what we intend to be hearing."""
+    controller, owntone, snapshot, clock = ctx
+    snapshot.save(["1"])
+    owntone.outputs[1]["selected"] = True  # user picked the HomePod while idle
+    controller.on_card_present("aaaa")
+    assert not any(c[0] == "set_outputs" for c in owntone.calls)
+
+    owntone.outputs[1]["selected"] = False  # ...and it refuses to pair
+    clock.advance(30.0)
+    controller.tick()
+
+    assert controller.last_error is not None
+    assert "2" in controller.last_error
+
+
+def test_owntones_own_fallback_to_local_is_not_mistaken_for_a_user_choice(ctx):
+    """The exact shape seen on hardware: HomePods only, pairing refused, and
+    OwnTone silently selects the ALSA output instead. A *gained* output is
+    normally the fingerprint of a person at the web UI -- but not when the
+    thing gained is the local soundcard, which is the one place OwnTone's own
+    fallback ever lands."""
+    controller, owntone, snapshot, clock = ctx
+    snapshot.save(["2"])  # HomePods only; nothing local wanted
+    owntone.outputs[0]["selected"] = False
+    controller.on_card_present("aaaa")
+    assert owntone.selected_output_ids() == ["2"]
+
+    owntone.outputs[1]["selected"] = False  # HomePod refuses to pair...
+    owntone.outputs[0]["selected"] = True   # ...and OwnTone falls back
+
+    clock.advance(30.0)
+    controller.tick()
+
+    assert controller.last_error is not None
+    assert "2" in controller.last_error
