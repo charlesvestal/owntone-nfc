@@ -89,6 +89,26 @@ class Controller:
         # See _save_selection.
         self._last_shrunken_selection: list[str] | None = None
 
+        # The outputs *we* last wrote, so that the next card can tell "the user
+        # changed this in OwnTone's web UI" from "this is the state we left
+        # behind ourselves". Written only where we call set_outputs, plus by
+        # _check_outputs when it observes the selection changing under us
+        # mid-album. See _restore_outputs.
+        #
+        # Deliberately in memory only, unlike the speaker snapshot. The
+        # snapshot is a record of the user's *choice*, which must outlive a
+        # reboot. This is a record of what the running process did, and a
+        # process that was not there cannot vouch for anything: across a
+        # restart the box was off, OwnTone restarted too and restored its own
+        # last-written selection (only on a clean shutdown -- a stale row there
+        # has already caused real confusion), and any of it could have been
+        # changed by hand in between. None therefore means "no idea", and
+        # _restore_outputs treats that as the user's, which costs one album
+        # played to whatever is already selected and never moves the sound
+        # somewhere nobody asked for. The persisted snapshot still takes effect
+        # from the next card on.
+        self._last_set_outputs: set[str] | None = None
+
         # The outputs we believe should be selected right now, or None when
         # there is nothing to watch (idle, or already reported). See
         # _check_outputs.
@@ -158,7 +178,7 @@ class Controller:
             intended = None
             with self._guarded("falling back to local outputs"):
                 local = self._owntone.local_output_ids()
-                self._owntone.set_outputs(local)
+                self._set_outputs(local)
                 intended = local
 
         with self._guarded("forcing shuffle and repeat off"):
@@ -274,6 +294,24 @@ class Controller:
             self.last_error = f"OwnTone error while {what}: {exc}"
             log.warning(self.last_error, exc_info=True)
 
+    # --- output selection --------------------------------------------------
+
+    def _set_outputs(self, ids: list[str]) -> None:
+        """Write the selection, and remember that the write was ours.
+
+        Every place that selects outputs goes through here. A write that is not
+        remembered looks like a user edit at the next card, which would mean
+        never restoring the snapshot again; and a remembered write that never
+        happened would mean overriding a choice we mistook for our own. The
+        record is only updated once OwnTone has accepted the call: if it
+        raises, what is selected is anybody's guess, and "no idea" is the
+        safer thing to be left believing.
+
+        Caller holds the lock.
+        """
+        self._owntone.set_outputs(ids)
+        self._last_set_outputs = set(ids)
+
     # --- output verification ----------------------------------------------
 
     def _watch_outputs(self, intended: list[str] | None) -> None:
@@ -344,12 +382,22 @@ class Controller:
             # intend to be hearing, and say nothing.
             if gained - local:
                 self._intended_outputs = set(selected)
+                self._last_set_outputs = set(selected)
                 self._outputs_generation += 1
                 return
 
             lost = intended - selected
             if not lost:
                 return
+
+            # Whatever this was, we have now *seen* it happen under us, so it
+            # is no longer something the next card should read as a hand edit
+            # made at the web UI. This is what keeps a speaker that drops
+            # mid-album out of the deliberate-change branch in
+            # _restore_outputs: the next card compares against the shrunken
+            # reality, finds no difference, and restores the snapshot -- which
+            # re-selects the speaker and gives it another chance to pair.
+            self._last_set_outputs = set(selected)
 
             vanished = sorted(lost - known)
             deselected = sorted(lost & known)
@@ -422,8 +470,9 @@ class Controller:
         self._owntone.stop()
         self._owntone.clear_queue()
         # Keep local selected, drop AirPlay so the HomePods go idle and are
-        # free for other senders.
-        self._owntone.set_outputs(self._owntone.local_output_ids())
+        # free for other senders. Through _set_outputs, because this is the
+        # selection the next card will find and must recognise as our own.
+        self._set_outputs(self._owntone.local_output_ids())
 
     def _restore_outputs(self) -> list[str]:
         """Select the outputs this record should play to, and return them.
@@ -434,17 +483,47 @@ class Controller:
         thing to watch -- a hand-picked HomePod that refuses to pair is exactly
         the failure this feeds.
         """
-        local = set(self._owntone.local_output_ids())
         current = self._owntone.selected_output_ids()
 
-        # Guard rail: anything non-local selected by hand while idle is a
-        # deliberate choice -- an AirPlay speaker, but equally a Chromecast or
-        # the HTTP stream, which are neither local nor AirPlay and which we
-        # would otherwise silently drop. Never clobber it with the snapshot.
-        # A local-only selection is just our own post-release state, so it
-        # does not count.
-        if any(output_id not in local for output_id in current):
-            return current
+        # Guard rail: never override a selection a person made. The question is
+        # only how to tell one, and the answer is to compare what OwnTone
+        # reports against what we last wrote ourselves (_set_outputs). If they
+        # differ, somebody has been at the web UI since -- so adopt their
+        # choice as the snapshot and leave the selection alone.
+        #
+        # Symmetric on purpose. The older rule asked instead whether anything
+        # non-local was selected, reasoning that only an AirPlay speaker can be
+        # deliberate and that local-only is merely our own post-release state.
+        # That is true right up until the user deliberately picks the local
+        # output because they want headphones: the snapshot then overrode them
+        # and the sound jumped back to the HomePods -- an override that has
+        # already woken somebody in the house. A Chromecast or the HTTP stream
+        # is covered by the same comparison, without needing to be named.
+        #
+        # An empty selection is not evidence of anything (the same judgement
+        # _save_selection makes), so it falls through to the snapshot: there is
+        # nothing there to clobber, and selecting nothing guarantees silence.
+        if current:
+            if self._last_set_outputs is None:
+                # Nothing written by this process yet -- first card after a
+                # start. We cannot claim this selection as ours, so we treat it
+                # as the user's and leave it be. Note what we do *not* do:
+                # adopt it into the snapshot. OwnTone's own idea of the
+                # selection is not authoritative (it persists it only on a
+                # clean shutdown), and letting a stale row overwrite the
+                # snapshot would destroy the choice the snapshot exists to
+                # carry across exactly this reboot. It is restored from the
+                # next card on, once a release has given us a record.
+                return current
+            if set(current) != self._last_set_outputs:
+                # Through _save_selection rather than straight to the snapshot,
+                # so that the shrunken-selection policy still applies: a
+                # speaker that merely dropped must not quietly delete itself
+                # from the saved choice. The playback selection is honoured
+                # either way -- refusing to overwrite the snapshot is not a
+                # reason to move somebody's audio.
+                self._save_selection(current)
+                return current
 
         desired = self._snapshot.load()
         if not desired:
@@ -463,5 +542,5 @@ class Controller:
                 log.warning(self.last_error)
                 return current
 
-        self._owntone.set_outputs(usable)
+        self._set_outputs(usable)
         return usable
