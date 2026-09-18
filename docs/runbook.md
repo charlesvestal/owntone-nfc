@@ -85,6 +85,48 @@ new information.
 **macOS is not usable as a test receiver** — macOS 27 returns 403 to an
 unauthenticated `/info` probe even over loopback.
 
+## Wi-Fi: keep 5 GHz OFF the DFS channels
+
+**This is the single most important network setting, and it cost an entire
+evening to find.**
+
+The Speedport defaulted its 5 GHz band to **channels 100/104/108/112**, which
+are DFS - radar-protected. On a DFS channel a client is **not permitted to
+probe actively**; it must sit and passively wait to catch a beacon. At good
+signal that is invisible. At marginal signal it fails, and it fails in a
+thoroughly confusing way: the Pi associates, completes the 4-way handshake,
+reports "connected" - and then never completes DHCP. It ends up with an IPv6
+link-local address and nothing else, so the box is alive and believes it is
+fine, while being completely unreachable.
+
+Set the router's 5 GHz channel to a fixed **non-DFS** channel: 36, 40, 44 or
+48. Measured effect, same Pi, same enclosure, same room:
+
+| 5 GHz channel | signal | rx rate | DHCP |
+|---|---|---|---|
+| 100 (DFS) | -69 dBm | 6 Mbit/s | never completes |
+| 36 (non-DFS) | -66 dBm | 325 Mbit/s | instant |
+
+Three dB of signal difference, and the difference between working and not.
+
+**What this looked like while being diagnosed**, so nobody repeats it: it was
+blamed in turn on the NFC HAT shielding the antenna, on Wi-Fi power save, on
+the enclosure, on a dead 2.4 GHz radio, on the OS, and on the board - and two
+full rebuilds and a board swap happened before the router setting was
+examined. The giveaway, in hindsight, was that transmit stayed fast while
+receive collapsed to the 6 Mbit/s floor: a receive-path problem, which is
+exactly what passive-only scanning produces.
+
+**Check the router first.** It is one settings page and rules out more than any
+amount of work on the Pi.
+
+## Wi-Fi: power save must stay off too
+
+Separate from the above and also necessary. With `802-11-wireless.powersave`
+on, transmit collapsed from 263 Mbit/s to 24. `provision.sh` disables it on
+every Wi-Fi connection it finds; on Trixie the setting survives a reboot
+despite netplan generating the NetworkManager config.
+
 ## Wi-Fi: this Pi 4 cannot see 2.4 GHz
 
 Unexplained and worth knowing before diagnosing anything else. This board:
