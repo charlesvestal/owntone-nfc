@@ -873,3 +873,24 @@ def test_a_dropped_speaker_is_not_mistaken_for_a_deliberate_change(ctx):
 
     assert owntone.selected_output_ids() == ["1", "2"]
     assert snapshot.load() == ["1", "2"]
+
+
+def test_no_outputs_selected_falls_through_to_the_snapshot(ctx):
+    """An empty selection is a broken state, not a choice.
+
+    "Leave a selection alone" protects a deliberate choice. Nothing selected
+    is not one - it guarantees silence, which the design forbids - so the
+    snapshot is restored instead. Observed for real: OwnTone came up with no
+    speakers selected at all, and without this a card would have played to
+    nothing.
+    """
+    controller, owntone, snapshot, _ = ctx
+    snapshot.save(["1", "2"])
+    for output in owntone.outputs:
+        output["selected"] = False
+    assert owntone.selected_output_ids() == []
+
+    controller.on_card_present("aaaa")
+
+    assert owntone.selected_output_ids() == ["1", "2"]
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
