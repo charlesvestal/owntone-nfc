@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import threading
 import time
 from contextlib import contextmanager
 from typing import Callable, Iterator
@@ -42,6 +43,19 @@ class Controller:
         self._config = config
         self._clock = clock
 
+        # Three threads share one Controller: the reader (present/removed),
+        # the tick thread (grace expiry) and Flask's workers (status reads).
+        # Re-entrant because the public methods call internal helpers and one
+        # of those may one day call another public method.
+        #
+        # The lock guards *mutation* only. The four public attributes are read
+        # without it from /api/status: each is a single attribute load, which
+        # cannot tear, and the alternative is an admin page that hangs for as
+        # long as _release() spends inside OwnTone. A status page that catches
+        # the state a moment before now_playing is a cosmetic flicker; a status
+        # page that will not load is the operator's only window going dark.
+        self._lock = threading.RLock()
+
         self.state = State.IDLE
         self.last_error: str | None = None
         self.now_playing: str | None = None
@@ -54,6 +68,10 @@ class Controller:
     # --- events -----------------------------------------------------------
 
     def on_card_present(self, uid: str) -> None:
+        with self._lock:
+            self._on_card_present(uid)
+
+    def _on_card_present(self, uid: str) -> None:
         # Recorded before the lookup so unregistered cards are still learnable.
         self.last_seen_uid = uid
         self.last_seen_at = self._clock()
@@ -94,6 +112,10 @@ class Controller:
         self.state = State.PLAYING
 
     def on_card_removed(self) -> None:
+        with self._lock:
+            self._on_card_removed()
+
+    def _on_card_removed(self) -> None:
         if self.state is not State.PLAYING:
             return
         with self._guarded("pausing"):
@@ -105,9 +127,21 @@ class Controller:
 
     def tick(self) -> None:
         """Called periodically; releases the outputs once grace expires."""
-        if self.state is not State.PAUSED:
-            return
-        if self._clock() - self._paused_at > self._config.grace_period_s:
+        # The decision to release and the IDLE stamp that follows it must be
+        # one atomic step. Otherwise a card placed while _release() is still
+        # talking to OwnTone starts an album that this method then silently
+        # stops and forgets, leaving the box quiet and claiming to be IDLE --
+        # and grace expiry is precisely when somebody is changing the record.
+        #
+        # Held across the OwnTone calls rather than dropped and re-checked:
+        # the client carries a 10s timeout, so this cannot block forever, and
+        # a reader event that waits its turn is far better than one that
+        # interleaves halfway through a release.
+        with self._lock:
+            if self.state is not State.PAUSED:
+                return
+            if self._clock() - self._paused_at <= self._config.grace_period_s:
+                return
             with self._guarded("releasing outputs"):
                 self._release()
             # Back to IDLE even on failure: the user is done with this record,
