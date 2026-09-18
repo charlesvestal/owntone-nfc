@@ -101,6 +101,10 @@ class OwnTone:
 
     # --- outputs ------------------------------------------------------------
 
+    def outputs(self) -> list[dict]:
+        """Every output OwnTone knows about, as returned by the API."""
+        return self._outputs()
+
     def selected_output_ids(self) -> list[str]:
         return [o["id"] for o in self._outputs() if o.get("selected")]
 

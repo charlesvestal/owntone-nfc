@@ -272,3 +272,51 @@ def test_artwork_returns_null_when_no_owntone_client(app_ctx):
     # create_app tolerates being built without one; the page must not break.
     client, _, _ = app_ctx
     assert client.get("/api/artwork?path=A/B").get_json()["url"] is None
+
+
+def test_status_reports_where_sound_will_come_out(app_ctx, monkeypatch):
+    # The page has to answer "what happens if I tap a card right now" without
+    # opening OwnTone. Today the answer lived in three places that disagreed.
+    from nfc_jukebox import web as web_module
+
+    class FakeOwnToneOutputs:
+        def __init__(self):
+            self.calls = 0
+
+        def outputs(self):
+            self.calls += 1
+            return [{"name": "Computer", "selected": True},
+                    {"name": "HomePod Left", "selected": False}]
+
+    _, controller, store = app_ctx
+    fake = FakeOwnToneOutputs()
+    app = web_module.create_app(Config(), controller, store, owntone=fake)
+    app.config.update(TESTING=True)
+    client = app.test_client()
+
+    assert client.get("/api/status").get_json()["outputs"] == ["Computer"]
+
+    # Polled once a second; the lookup must be cached, not asked every time.
+    for _ in range(5):
+        client.get("/api/status")
+    assert fake.calls == 1
+
+
+def test_status_outputs_is_null_without_an_owntone_client(app_ctx):
+    client, _, _ = app_ctx
+    assert client.get("/api/status").get_json()["outputs"] is None
+
+
+def test_status_survives_owntone_being_unreachable(app_ctx):
+    from nfc_jukebox import web as web_module
+
+    class Broken:
+        def outputs(self):
+            raise RuntimeError("owntone is down")
+
+    app = web_module.create_app(Config(), app_ctx[1], app_ctx[2], owntone=Broken())
+    app.config.update(TESTING=True)
+    # A dead OwnTone must not take the admin page down with it.
+    body = app.test_client().get("/api/status").get_json()
+    assert body["outputs"] is None
+    assert body["state"] is not None
