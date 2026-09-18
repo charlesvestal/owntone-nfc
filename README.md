@@ -117,18 +117,14 @@ remembers them.
 - **[`docs/superpowers/specs/`](docs/superpowers/specs/)** — the design, and
   what hardware testing proved wrong about it.
 
-## Two things specific to this stack
+## One thing worth knowing
 
 **`user_agent = "AirPlay/999.0.0"` is required in `owntone.conf`.** Apple OS 27
 gates `GET /info` on the User-Agent and returns 403 to OwnTone's default, so
 AirPlay speakers stop working as they update. `provision.sh` sets it. Upstream:
 [owntone#2042](https://github.com/owntone/owntone-server/issues/2042).
 
-**Album ordering is done client-side.** OwnTone's expression grammar accepts
-one sort field, so a multi-disc album can't be ordered by the server. Tracks are
-fetched, sorted on `(disc, track)`, and queued by explicit URI.
-
-Environment-specific gotchas — networking, enclosures, recovery — are in
+Environment-specific troubleshooting — networking, enclosures, recovery — is in
 [`docs/runbook.md`](docs/runbook.md).
 
 ## Development
