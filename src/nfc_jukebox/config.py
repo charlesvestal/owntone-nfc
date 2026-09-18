@@ -42,6 +42,13 @@ class Config:
     bump_window_s: float = 0.25
     grace_period_s: float = 90.0
     web_port: int = 8080
+    # BCM pin wired to the PN532's RSTPDN (active-low reset). On the Waveshare
+    # HAT this repo is built around, RSTPDN is jumpered to D20. Killing the
+    # service mid-transaction can leave the chip out of frame sync, after which
+    # every open times out forever; pulsing this line is the only recovery.
+    # Set it to null on a board with no reset jumper - the reader then just
+    # retries, which is what it did before this existed.
+    reset_gpio: int | None = 20
 
     _PATH_FIELDS = ("library_root", "cards_file", "outputs_file")
     _STR_FIELDS = ("owntone_url", "reader_device")
@@ -70,6 +77,19 @@ class Config:
         # Anything that failed coercion was dropped, so the field's declared
         # default applies.
         values = {k: v for k, v in values.items() if v is not None}
+
+        # reset_gpio is the one field where None is a real setting ("no reset
+        # line is wired") rather than "fall back to the default", so it cannot
+        # ride the drop-None pass above. Coerce it afterwards instead.
+        if "reset_gpio" in raw:
+            try:
+                values["reset_gpio"] = cls._as_gpio(raw["reset_gpio"])
+            except (TypeError, ValueError) as exc:
+                log.warning("Ignoring invalid config value for reset_gpio "
+                            "(%r): %s; using the default",
+                            raw["reset_gpio"], exc)
+                values.pop("reset_gpio", None)
+
         return cls(**values)
 
     @staticmethod
@@ -127,6 +147,23 @@ class Config:
         if number < 0:
             raise ValueError("must not be negative")
         return number
+
+    # Words an operator might reasonably type to mean "there is no reset line".
+    _GPIO_DISABLED_WORDS = ("", "none", "null", "off", "no", "disabled")
+
+    @classmethod
+    def _as_gpio(cls, value) -> "int | None":
+        """A BCM pin number, or None meaning 'no reset line is wired'."""
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip().lower() in cls._GPIO_DISABLED_WORDS:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise TypeError("expected a BCM GPIO number, or null to disable")
+        pin = int(value)
+        if not 0 <= pin <= 53:
+            raise ValueError("must be a BCM GPIO number between 0 and 53")
+        return pin
 
     @staticmethod
     def _as_port(value) -> int:
