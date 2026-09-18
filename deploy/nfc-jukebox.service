@@ -9,9 +9,21 @@ Description=NFC Vinyl Jukebox
 # keeps the ordering and keeps that resilience.
 After=network-online.target owntone.service
 Wants=network-online.target owntone.service
-# Do not start before the music is actually mounted. Harmless for local
-# storage; essential if library_root becomes a NAS mount (Task 16).
-RequiresMountsFor=/srv/music
+# Deliberately NOT RequiresMountsFor=/srv/music, which this service carried
+# until the NAS stopped resolving over mDNS one evening. The mount failed, so
+# systemd refused to start this service *and* OwnTone, and the box went
+# completely silent: no playback, and no admin page to say why. Diagnosing it
+# needed SSH, and the symptoms were indistinguishable from a dead Pi -- which
+# cost an evening of chasing power supplies and SD cards.
+#
+# OwnTone keeps the requirement, because it genuinely cannot serve files that
+# are not there. This service can: it renders a page, reports the missing
+# library, and recovers on its own once the mount appears. A jukebox that
+# explains itself beats one that refuses to start.
+#
+# After= without Requires= so the mount is still *attempted* first on a normal
+# boot, and the usual case is unchanged.
+After=srv-music.mount
 
 [Service]
 Type=simple
