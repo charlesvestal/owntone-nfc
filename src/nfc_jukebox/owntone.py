@@ -174,7 +174,11 @@ class OwnTone:
             # failure rather than silently queueing an empty album.
             raise LookupError(f"no tracks found for {relative_path!r}")
 
-        tracks.sort(key=lambda t: (t.get("disc_number") or 0,
+        # Disc numbering starts at 1, so 0 or missing means "unset" and must
+        # sort WITH disc 1, not before it. Real case: two tracks moved into an
+        # album kept disc=0 from their old tags while the rest were disc=1 -
+        # treating 0 as its own disc put tracks 11 and 12 at the front.
+        tracks.sort(key=lambda t: (t.get("disc_number") or 1,
                                    t.get("track_number") or 0,
                                    t.get("path") or ""))
         uris = ",".join(t["uri"] for t in tracks if t.get("uri"))

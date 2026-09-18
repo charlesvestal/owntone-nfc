@@ -231,3 +231,21 @@ def test_album_artwork_url_escapes_the_path_too(client):
     client.album_artwork_url('Weird/Album "Name"')
     expression = respx.calls.last.request.url.params["expression"]
     assert '\\"Name\\"' in expression
+
+
+@respx.mock
+def test_play_album_treats_disc_zero_as_disc_one(client):
+    # Disc numbering starts at 1, so 0 means "unset". Found on Fatboy Slim's
+    # "Better Living Through Chemistry": two tracks moved into the album kept
+    # disc=0 from their old tags while the rest were disc=1, and sorting 0
+    # first put tracks 11 and 12 at the front of the album.
+    _mock_album([
+        _track("library:track:t11", 0, 11),
+        _track("library:track:t1", 1, 1),
+        _track("library:track:t12", 0, 12),
+        _track("library:track:t2", 1, 2),
+    ])
+    client.play_album("Fatboy Slim/Better Living Through Chemistry")
+    assert respx.calls.last.request.url.params["uris"].split(",") == [
+        "library:track:t1", "library:track:t2",
+        "library:track:t11", "library:track:t12"]
