@@ -20,6 +20,10 @@ TICK_INTERVAL = 1.0
 def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # The admin page polls /api/status every second, so werkzeug's access log
+    # writes a line per second forever. On a box that runs for months that
+    # buries the errors worth reading. Warnings and above still come through.
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
     log = logging.getLogger("nfc_jukebox")
 
     config = Config.load()
