@@ -16,6 +16,22 @@ from typing import Callable, Iterator
 
 log = logging.getLogger(__name__)
 
+# How often, while an album is playing, to ask OwnTone whether the outputs we
+# asked for are still the outputs it is using.
+#
+# Not every tick: tick() runs once a second for as long as the box is powered
+# on, and a per-tick check would be two HTTP round trips a second, forever, to
+# watch for something that happens once at the start of a record. Not at card
+# tap either: the AirPlay 2 failure this exists to catch lands *after* every
+# synchronous call has returned success, and the tap path is already ~3s of
+# latency that must not grow.
+#
+# 10s is chosen from the failure's own timing: OwnTone's pairing attempt and
+# the self-deselect that follows it play out over a few seconds, so the first
+# check lands after the dust settles, and the operator learns the truth about
+# twelve seconds into side one rather than at the end of it.
+OUTPUT_CHECK_INTERVAL_S = 10.0
+
 
 class State(enum.Enum):
     IDLE = "idle"
@@ -66,6 +82,15 @@ class Controller:
         # See _save_selection.
         self._last_shrunken_selection: list[str] | None = None
 
+        # The outputs we believe should be selected right now, or None when
+        # there is nothing to watch (idle, or already reported). See
+        # _check_outputs.
+        self._intended_outputs: set[str] | None = None
+        self._next_output_check = 0.0
+        # Bumped whenever the intended set changes, so a check that started
+        # before a new card arrived cannot publish its stale answer.
+        self._outputs_generation = 0
+
     # --- events -----------------------------------------------------------
 
     def on_card_present(self, uid: str) -> None:
@@ -109,11 +134,18 @@ class Controller:
         # still in OwnTone's list from a cached mDNS record but is powered off
         # makes `/api/outputs/set` fail, and that must not be allowed to skip
         # playback and leave a card sitting on the platter in silence.
+        #
+        # What we end up believing should be audible. None means we never
+        # managed to work it out, and there is then nothing to verify against.
+        intended: list[str] | None = None
         with self._guarded(f"selecting outputs for {card.name}") as outputs_outcome:
-            self._restore_outputs()
+            intended = self._restore_outputs()
         if not outputs_outcome.ok:
+            intended = None
             with self._guarded("falling back to local outputs"):
-                self._owntone.set_outputs(self._owntone.local_output_ids())
+                local = self._owntone.local_output_ids()
+                self._owntone.set_outputs(local)
+                intended = local
 
         with self._guarded("forcing shuffle and repeat off"):
             self._owntone.set_vinyl_playback_mode()
@@ -122,11 +154,13 @@ class Controller:
             self._owntone.play_album(card.path)
         if not outcome.ok:
             # Nothing is playing, so do not claim otherwise.
+            self._watch_outputs(None)
             self.state = State.IDLE
             self.now_playing = None
             self._last_uid = None
             return
 
+        self._watch_outputs(intended)
         self._last_uid = uid
         self.now_playing = card.name
         self.state = State.PLAYING
@@ -146,7 +180,12 @@ class Controller:
         self.state = State.PAUSED
 
     def tick(self) -> None:
-        """Called periodically; releases the outputs once grace expires."""
+        """Called periodically; releases the outputs once grace expires, and
+        verifies that what we are playing to is what we asked for."""
+        self._tick_grace()
+        self._check_outputs()
+
+    def _tick_grace(self) -> None:
         # The decision to release and the IDLE stamp that follows it must be
         # one atomic step. Otherwise a card placed while _release() is still
         # talking to OwnTone starts an album that this method then silently
@@ -166,6 +205,7 @@ class Controller:
                 self._release()
             # Back to IDLE even on failure: the user is done with this record,
             # and retrying the release on every tick would only spam the log.
+            self._watch_outputs(None)
             self.state = State.IDLE
             self.now_playing = None
             self._last_uid = None
@@ -200,6 +240,107 @@ class Controller:
             outcome.ok = False
             self.last_error = f"OwnTone error while {what}: {exc}"
             log.warning(self.last_error, exc_info=True)
+
+    # --- output verification ----------------------------------------------
+
+    def _watch_outputs(self, intended: list[str] | None) -> None:
+        """Start (or stop, with None) watching a set of outputs.
+
+        Caller holds the lock.
+        """
+        self._intended_outputs = set(intended) if intended else None
+        self._next_output_check = self._clock() + OUTPUT_CHECK_INTERVAL_S
+        self._outputs_generation += 1
+
+    def _check_outputs(self) -> None:
+        """Notice, after the fact, that we are not playing where we asked to.
+
+        Every call on the card path can return success and the record can
+        still come out of the wrong speaker: an AirPlay 2 receiver refuses
+        pairing seconds later, deselects itself, and OwnTone quietly falls back
+        to the local soundcard. `requires_auth`/`needs_auth_key` were both
+        False on the real devices while OwnTone's log demanded a PIN, so the
+        only observable is that what we asked for is no longer selected.
+        """
+        with self._lock:
+            if self.state is not State.PLAYING:
+                return
+            intended = self._intended_outputs
+            if not intended:
+                return
+            now = self._clock()
+            if now < self._next_output_check:
+                return
+            self._next_output_check = now + OUTPUT_CHECK_INTERVAL_S
+            generation = self._outputs_generation
+
+        # Outside the lock, deliberately. Everything else in this file that
+        # talks to OwnTone does so holding it, because those calls are also
+        # *mutating* state and must be atomic against the reader thread. This
+        # one only reads, so parking the reader -- and with it the card tap --
+        # behind two HTTP round trips would buy nothing. _guarded is not used
+        # for the same reason: it writes last_error, and writes happen below,
+        # under the lock, once we know the answer is still current.
+        try:
+            known = set(self._owntone.all_output_ids())
+            selected = set(self._owntone.selected_output_ids())
+            gained = selected - intended
+            # Only asked for when something was gained, to keep the steady
+            # state at two round trips per interval.
+            local = set(self._owntone.local_output_ids()) if gained else set()
+        except Exception as exc:  # see _guarded for why this is so broad
+            message = f"OwnTone error while checking the selected outputs: {exc}"
+            with self._lock:
+                self.last_error = message
+            log.warning(message, exc_info=True)
+            return
+
+        with self._lock:
+            # A new card (or a release) landed while we were asking. That
+            # answer describes the previous record; publishing it would put a
+            # stale complaint on a fresh, healthy album.
+            if self._outputs_generation != generation:
+                return
+
+            # Is this a person, or a failure? Nothing in the API says so
+            # directly -- a deliberate deselect and a self-deselecting HomePod
+            # look identical. But a *gain* is evidence: OwnTone's fallback only
+            # ever lands on the local soundcard, so a newly selected output
+            # that is not local is something a human chose in the web UI
+            # mid-album. Honour it: adopt the new selection as what we now
+            # intend to be hearing, and say nothing.
+            if gained - local:
+                self._intended_outputs = set(selected)
+                self._outputs_generation += 1
+                return
+
+            lost = intended - selected
+            if not lost:
+                return
+
+            vanished = sorted(lost - known)
+            deselected = sorted(lost & known)
+            if vanished:
+                self.last_error = (
+                    f"Output(s) {', '.join(vanished)} are no longer known to "
+                    "OwnTone; the record is playing without them"
+                )
+            else:
+                self.last_error = (
+                    f"Output(s) {', '.join(deselected)} deselected themselves "
+                    "after playback started (an AirPlay receiver refusing to "
+                    "pair does this); the record is playing to "
+                    f"{', '.join(sorted(selected)) or 'nothing'} instead"
+                )
+            log.warning(self.last_error)
+
+            # Reported once and then dropped, for two reasons. Re-selecting a
+            # receiver that just refused pairing will refuse again, so retrying
+            # would be a loop that never converges and only delays the truth.
+            # And re-reporting every interval would bury the rest of the log in
+            # one HomePod's sulk. The next card re-arms this.
+            self._intended_outputs = None
+            self._outputs_generation += 1
 
     def _is_bump(self, uid: str) -> bool:
         """A dropped read, not a deliberate lift — resume rather than restart."""
@@ -251,7 +392,15 @@ class Controller:
         # free for other senders.
         self._owntone.set_outputs(self._owntone.local_output_ids())
 
-    def _restore_outputs(self) -> None:
+    def _restore_outputs(self) -> list[str]:
+        """Select the outputs this record should play to, and return them.
+
+        The return value is what we *intend* to be audible, which is not always
+        what we wrote: on the paths that deliberately leave the selection
+        alone, it is whatever the user already had selected. That is still the
+        thing to watch -- a hand-picked HomePod that refuses to pair is exactly
+        the failure this feeds.
+        """
         local = set(self._owntone.local_output_ids())
         current = self._owntone.selected_output_ids()
 
@@ -262,11 +411,11 @@ class Controller:
         # A local-only selection is just our own post-release state, so it
         # does not count.
         if any(output_id not in local for output_id in current):
-            return
+            return current
 
         desired = self._snapshot.load()
         if not desired:
-            return
+            return current
 
         available = set(self._owntone.all_output_ids())
         usable = [output_id for output_id in desired if output_id in available]
@@ -279,6 +428,7 @@ class Controller:
                 # silence; leave whatever OwnTone has and let playback try.
                 self.last_error = "No usable outputs; playing to whatever is selected"
                 log.warning(self.last_error)
-                return
+                return current
 
         self._owntone.set_outputs(usable)
+        return usable
