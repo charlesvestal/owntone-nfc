@@ -8,11 +8,17 @@ from __future__ import annotations
 
 import httpx
 
-# OwnTone runs on localhost, so a call taking seconds means it is wedged, not
-# busy. This bounds how long the controller's lock can be held during a
-# release: a slow release blocks the reader thread, so a generous timeout
-# would park card detection for as long as it lasts.
-DEFAULT_TIMEOUT_S = 3.0
+# OwnTone runs on localhost, so most calls return in 2-3ms. The exception is
+# selecting an AirPlay output: that activates the device, and the AirPlay 2 PTP
+# handshake alone measures ~2s. A 3s ceiling was tried and was too tight - it
+# turned a slow HomePod into "OwnTone error while starting <album>: timed out"
+# and the card played nothing.
+#
+# The cost of a longer ceiling is that the controller holds its lock across
+# these calls, so a hung OwnTone parks card detection for up to this long.
+# Ten seconds of unresponsiveness after OwnTone dies is a far better trade than
+# cards that fail whenever a speaker takes its time waking up.
+DEFAULT_TIMEOUT_S = 10.0
 
 # Tags and keywords checked against OwnTone's smart-playlist lexer
 # (src/parsers/smartpl_lexer.l): `path` is the string tag, `disc` and `track`
