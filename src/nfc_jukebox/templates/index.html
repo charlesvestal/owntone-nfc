@@ -1,0 +1,61 @@
+<!doctype html>
+<title>Jukebox Admin</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  td, th { text-align: left; padding: .4rem; border-bottom: 1px solid #ddd; }
+  #uid { font-family: ui-monospace, monospace; font-size: 1.3rem; }
+  .muted { color: #666; }
+</style>
+
+<h1>Jukebox</h1>
+<p id="status" class="muted">…</p>
+<p class="muted">Player controls, volume and speakers live in
+  <a href="{{ owntone_url }}">OwnTone</a>.</p>
+
+<h2>Register a card</h2>
+<p>Tap a card on the reader. Its ID appears here.</p>
+<p id="uid">—</p>
+<label>Name <input id="name"></label>
+<label>Album <select id="album"></select></label>
+<button onclick="save()">Save</button>
+
+<h2>Cards</h2>
+<table><thead><tr><th>Name</th><th>Album</th><th>UID</th><th></th></tr></thead>
+<tbody id="cards"></tbody></table>
+
+<script>
+async function refresh() {
+  const s = await (await fetch('/api/status')).json();
+  document.getElementById('status').textContent =
+    `${s.state}${s.now_playing ? ' — ' + s.now_playing : ''}` +
+    (s.last_error ? ` · ${s.last_error}` : '');
+  if (s.last_seen_uid) document.getElementById('uid').textContent = s.last_seen_uid;
+
+  const c = await (await fetch('/api/cards')).json();
+  document.getElementById('cards').innerHTML = c.cards.map(card =>
+    `<tr><td>${card.name}</td><td>${card.path}</td><td>${card.uid}</td>
+     <td><button onclick="del('${card.uid}')">Delete</button></td></tr>`).join('');
+}
+async function loadAlbums() {
+  const a = await (await fetch('/api/albums')).json();
+  document.getElementById('album').innerHTML =
+    a.albums.map(x => `<option>${x}</option>`).join('');
+}
+async function save() {
+  const uid = document.getElementById('uid').textContent;
+  if (uid === '—') return alert('Tap a card first.');
+  await fetch('/api/cards', {method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({uid,
+      name: document.getElementById('name').value,
+      path: document.getElementById('album').value})});
+  document.getElementById('name').value = '';
+  refresh();
+}
+async function del(uid) {
+  await fetch('/api/cards/' + uid, {method: 'DELETE'});
+  refresh();
+}
+loadAlbums(); refresh(); setInterval(refresh, 1000);
+</script>
