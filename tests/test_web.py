@@ -354,3 +354,51 @@ def test_power_reports_a_failure_instead_of_pretending(app_ctx):
     response = client.post("/api/power", json={"action": "poweroff"})
     assert response.status_code == 500
     assert "password" in response.get_json()["error"]
+
+
+# --- start over -------------------------------------------------------------
+#
+# Lifting a card now pauses rather than resets, so the only way back to track 1
+# mid-listen is to ask for it. This is the one transport control the admin page
+# carries, and it exists because the vinyl model took the other one away.
+
+
+def _loaded(app_ctx):
+    """An app whose controller has an album loaded, as after a tap."""
+    client, controller, store = app_ctx
+    store.save({"aaaa": Card(uid="aaaa", name="Blue",
+                             path="Miles Davis/Kind of Blue")})
+    controller.on_card_present("aaaa")
+    return client, controller
+
+
+def test_start_over_restarts_the_loaded_album(app_ctx):
+    client, controller = _loaded(app_ctx)
+    response = client.post("/api/startover")
+    assert response.status_code == 200
+    assert response.get_json()["now_playing"] == "Blue"
+    assert controller.state is State.PLAYING
+
+
+def test_start_over_with_nothing_loaded_is_a_409_not_a_500(app_ctx):
+    client, _, _ = app_ctx
+    response = client.post("/api/startover")
+    assert response.status_code == 409
+    assert response.get_json()["error"]
+
+
+def test_start_over_surfaces_an_owntone_failure(app_ctx):
+    client, controller, _ = app_ctx
+
+    def boom():
+        raise RuntimeError("OwnTone error while starting Blue over: 500")
+
+    controller.start_over = boom
+    response = client.post("/api/startover")
+    assert response.status_code == 500
+    assert "500" in response.get_json()["error"]
+
+
+def test_the_page_offers_start_over(app_ctx):
+    client, _, _ = app_ctx
+    assert "Start over" in client.get("/").get_data(as_text=True)

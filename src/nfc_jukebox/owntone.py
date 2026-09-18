@@ -210,6 +210,25 @@ class OwnTone:
     def clear_queue(self) -> None:
         self._request("PUT", "/api/queue/clear")
 
+    def queue_length(self) -> int:
+        """How many tracks are queued right now.
+
+        The resume position lives in this queue and nowhere else, so this is
+        how the controller tells "the album we loaded is still there" from a
+        stale memory of one: OwnTone can be restarted under a running jukebox,
+        and resuming into an empty queue is silence.
+
+        `count` is read in preference to the item list because OwnTone paginates
+        `/api/queue`, and a paged response would undercount a long boxed set -
+        which does not matter for "is it empty", but a length that is sometimes
+        the length and sometimes a page size is a trap for the next reader.
+        """
+        body = self._request("GET", "/api/queue").json()
+        count = body.get("count")
+        if count is None:
+            return len(body.get("items") or [])
+        return int(count)
+
     def album_artwork_url(self, relative_path: str) -> str | None:
         """OwnTone-relative artwork URL for the album at this path, if any.
 

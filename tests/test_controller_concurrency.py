@@ -26,18 +26,24 @@ RACE_WINDOW = 0.25
 
 
 class BlockingOwnTone(FakeOwnTone):
-    """stop() parks inside _release() until the test lets it go."""
+    """set_outputs() parks inside _release() until the test lets it go.
+
+    The release no longer stops playback - that is what preserves the place on
+    the record - so the slow call it now parks on is the one that hands the
+    speakers back.
+    """
 
     def __init__(self) -> None:
         super().__init__()
-        self.stop_entered = threading.Event()
-        self.may_stop = threading.Event()
+        self.release_entered = threading.Event()
+        self.may_release = threading.Event()
         self.play_album_called = threading.Event()
 
-    def stop(self):
-        self.stop_entered.set()
-        assert self.may_stop.wait(JOIN_TIMEOUT), "test never released stop()"
-        super().stop()
+    def set_outputs(self, ids):
+        self.release_entered.set()
+        assert self.may_release.wait(JOIN_TIMEOUT), \
+            "test never released set_outputs()"
+        super().set_outputs(ids)
 
     def play_album(self, path):
         super().play_album(path)
@@ -52,7 +58,7 @@ def ctx():
         "aaaa": Card(uid="aaaa", name="Blue", path="Miles Davis/Kind of Blue"),
         "bbbb": Card(uid="bbbb", name="Rumours", path="Fleetwood Mac/Rumours"),
     })
-    config = Config(bump_window_s=0.5, grace_period_s=90.0)
+    config = Config(grace_period_s=90.0)
     controller = Controller(owntone, cards, FakeSnapshot(), config, clock=clock)
     return controller, owntone, clock
 
@@ -74,14 +80,14 @@ def test_card_placed_during_release_is_not_silently_stopped(ctx):
     clock.advance(91.0)
 
     ticker = _run(controller.tick)
-    assert owntone.stop_entered.wait(JOIN_TIMEOUT), "tick never reached _release"
+    assert owntone.release_entered.wait(JOIN_TIMEOUT), "tick never reached _release"
 
     reader = _run(controller.on_card_present, "bbbb")
     # Unsynchronised, the reader races straight through here and its state is
     # then clobbered. Synchronised, it is parked and this simply times out.
     owntone.play_album_called.wait(RACE_WINDOW)
 
-    owntone.may_stop.set()
+    owntone.may_release.set()
     ticker.join(JOIN_TIMEOUT)
     reader.join(JOIN_TIMEOUT)
     assert not ticker.is_alive() and not reader.is_alive()
@@ -103,7 +109,7 @@ def test_status_reads_are_not_blocked_by_a_slow_release(ctx):
     clock.advance(91.0)
 
     ticker = _run(controller.tick)
-    assert owntone.stop_entered.wait(JOIN_TIMEOUT), "tick never reached _release"
+    assert owntone.release_entered.wait(JOIN_TIMEOUT), "tick never reached _release"
 
     read = {}
 
@@ -120,6 +126,6 @@ def test_status_reads_are_not_blocked_by_a_slow_release(ctx):
     assert not status.is_alive(), "/api/status would hang during a slow release"
     assert read["snapshot"][0] in tuple(State)
 
-    owntone.may_stop.set()
+    owntone.may_release.set()
     ticker.join(JOIN_TIMEOUT)
     assert not ticker.is_alive()

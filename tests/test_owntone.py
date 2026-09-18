@@ -249,3 +249,28 @@ def test_play_album_treats_disc_zero_as_disc_one(client):
     assert respx.calls.last.request.url.params["uris"].split(",") == [
         "library:track:t1", "library:track:t2",
         "library:track:t11", "library:track:t12"]
+
+
+@respx.mock
+def test_queue_length_reports_what_owntone_holds(client):
+    respx.get(f"{BASE}/api/queue").mock(return_value=httpx.Response(
+        200, json={"version": 7, "count": 12,
+                   "items": [{"id": 1}, {"id": 2}]}))
+    # `count` is the whole queue; `items` can be one page of it. The controller
+    # asks this to decide whether a resume has anything to resume into, so an
+    # undercount that happened to be zero would be a silent restart.
+    assert client.queue_length() == 12
+
+
+@respx.mock
+def test_queue_length_falls_back_to_counting_items(client):
+    respx.get(f"{BASE}/api/queue").mock(
+        return_value=httpx.Response(200, json={"items": [{"id": 1}]}))
+    assert client.queue_length() == 1
+
+
+@respx.mock
+def test_queue_length_of_an_empty_queue_is_zero(client):
+    respx.get(f"{BASE}/api/queue").mock(
+        return_value=httpx.Response(200, json={"count": 0, "items": []}))
+    assert client.queue_length() == 0

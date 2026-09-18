@@ -17,12 +17,12 @@ def test_reads_values_from_yaml(tmp_path):
     path.write_text(
         "owntone_url: http://pi:3689\n"
         "library_root: /mnt/music\n"
-        "bump_window_s: 0.4\n"
+        "grace_period_s: 45\n"
     )
     cfg = Config.load(path)
     assert cfg.owntone_url == "http://pi:3689"
     assert cfg.library_root == Path("/mnt/music")
-    assert cfg.bump_window_s == 0.4
+    assert cfg.grace_period_s == 45.0
 
 
 def test_unknown_keys_are_ignored(tmp_path):
@@ -87,12 +87,12 @@ def test_non_numeric_float_field_falls_back_to_its_default(tmp_path, caplog):
 
 def test_numeric_strings_are_coerced(tmp_path):
     path = tmp_path / "config.yaml"
-    path.write_text('web_port: "8080"\nbump_window_s: "0.4"\ngrace_period_s: "30"\n')
+    path.write_text('web_port: "8080"\npresence_debounce_s: "0.4"\ngrace_period_s: "30"\n')
     cfg = Config.load(path)
     assert cfg.web_port == 8080
     assert isinstance(cfg.web_port, int)
-    assert cfg.bump_window_s == 0.4
-    assert isinstance(cfg.bump_window_s, float)
+    assert cfg.presence_debounce_s == 0.4
+    assert isinstance(cfg.presence_debounce_s, float)
     assert cfg.grace_period_s == 30.0
     assert isinstance(cfg.grace_period_s, float)
 
@@ -114,10 +114,10 @@ def test_out_of_range_port_falls_back_to_default(tmp_path, caplog):
 
 def test_negative_timings_fall_back_to_defaults(tmp_path):
     path = tmp_path / "config.yaml"
-    path.write_text("grace_period_s: -5\nbump_window_s: -1\n")
+    path.write_text("grace_period_s: -5\npresence_debounce_s: -1\n")
     cfg = Config.load(path)
     assert cfg.grace_period_s == Config().grace_period_s
-    assert cfg.bump_window_s == Config().bump_window_s
+    assert cfg.presence_debounce_s == Config().presence_debounce_s
 
 
 def test_non_string_url_falls_back_to_default(tmp_path):
@@ -142,10 +142,10 @@ def test_boolean_is_not_accepted_as_a_port(tmp_path):
 
 def test_non_finite_timing_falls_back_to_default(tmp_path):
     path = tmp_path / "config.yaml"
-    path.write_text("grace_period_s: .nan\nbump_window_s: .inf\n")
+    path.write_text("grace_period_s: .nan\npresence_debounce_s: .inf\n")
     cfg = Config.load(path)
     assert cfg.grace_period_s == Config().grace_period_s
-    assert cfg.bump_window_s == Config().bump_window_s
+    assert cfg.presence_debounce_s == Config().presence_debounce_s
 
 
 # --- reset_gpio -------------------------------------------------------------
@@ -223,3 +223,72 @@ def test_bad_presence_debounce_falls_back_to_the_default(tmp_path, caplog):
         cfg = Config.load(path)
     assert cfg.presence_debounce_s == Config().presence_debounce_s
     assert "presence_debounce_s" in caplog.text
+
+
+# --- resume_reset_hour ------------------------------------------------------
+#
+# The nightly reset that stops an album left unfinished at midnight from still
+# waiting mid-side at lunchtime. Zero is a real setting (midnight), so, exactly
+# like reset_gpio, "off" cannot be spelled as a falsy value - it needs its own
+# vocabulary.
+
+
+def test_resume_reset_hour_defaults_to_three_am():
+    assert Config().resume_reset_hour == 3
+
+
+def test_resume_reset_hour_is_configurable(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("resume_reset_hour: 5\n")
+    assert Config.load(path).resume_reset_hour == 5
+
+
+def test_midnight_is_a_real_reset_hour_not_an_off_switch(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("resume_reset_hour: 0\n")
+    assert Config.load(path).resume_reset_hour == 0
+
+
+def test_null_resume_reset_hour_turns_the_reset_off(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("resume_reset_hour: null\n")
+    assert Config.load(path).resume_reset_hour is None
+
+
+def test_off_keyword_turns_the_resume_reset_off(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text('resume_reset_hour: "off"\n')
+    assert Config.load(path).resume_reset_hour is None
+
+
+def test_out_of_range_resume_reset_hour_falls_back_to_default(tmp_path, caplog):
+    path = tmp_path / "config.yaml"
+    path.write_text("resume_reset_hour: 24\n")
+    with caplog.at_level(logging.WARNING):
+        assert Config.load(path).resume_reset_hour == 3
+    assert "resume_reset_hour" in caplog.text
+
+
+def test_non_numeric_resume_reset_hour_falls_back_to_default(tmp_path, caplog):
+    path = tmp_path / "config.yaml"
+    path.write_text("resume_reset_hour: bedtime\n")
+    with caplog.at_level(logging.WARNING):
+        assert Config.load(path).resume_reset_hour == 3
+    assert "resume_reset_hour" in caplog.text
+
+
+def test_boolean_is_not_accepted_as_a_resume_reset_hour(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("resume_reset_hour: true\n")
+    assert Config.load(path).resume_reset_hour == 3
+
+
+def test_a_stale_bump_window_setting_is_harmless(tmp_path):
+    """The setting was removed with the resume rewrite. Boxes in the field
+    still have it in /etc/nfc-jukebox/config.yaml, and an unknown key must
+    cost nothing - the alternative is a jukebox that will not start."""
+    path = tmp_path / "config.yaml"
+    path.write_text("bump_window_s: 0.25\ngrace_period_s: 45\n")
+    cfg = Config.load(path)
+    assert cfg.grace_period_s == 45.0
+    assert not hasattr(cfg, "bump_window_s")

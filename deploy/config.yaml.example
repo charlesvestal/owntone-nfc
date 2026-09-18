@@ -4,9 +4,6 @@ library_root: /srv/music
 cards_file: /etc/nfc-jukebox/cards.yaml
 outputs_file: /var/lib/nfc-jukebox/outputs.json
 reader_device: "tty:AMA0:pn532"
-# Measured in Spike 2 (2026-09-18): 35ms worst-case presence gap on this
-# hardware. 0.25 is ~7x margin, and below human lift-and-replace speed.
-bump_window_s: 0.25
 # How long a card must be continuously unseen before the reader treats it as
 # lifted. Measured in Spike 3 (2026-09-18): a 4-byte Mifare-Classic-style card
 # sitting motionless reported 725 present/absent cycles in 25 seconds (median
@@ -18,6 +15,14 @@ bump_window_s: 0.25
 # Raise it if an untested card still stutters; lower it if a lift feels laggy.
 presence_debounce_s: 0.5
 grace_period_s: 90.0
+# Hour of the local day at which an unfinished album stops being resumable.
+# Lifting a card pauses the record and putting it back picks up where it left
+# off, however long it has been - but an album abandoned at midnight should be
+# side one again the next morning, not the back half of side two. 3 is when
+# nobody is listening.
+# Note 0 means midnight, a real setting, so "off" has to be spelled out:
+# set it to null (or "off") to keep the place until a different card is played.
+resume_reset_hour: 3
 web_port: 8080
 # BCM pin wired to the PN532's RSTPDN (active-low reset). On the Waveshare
 # PN532 HAT that pin is jumpered to D20. Restarting the service mid-read can
