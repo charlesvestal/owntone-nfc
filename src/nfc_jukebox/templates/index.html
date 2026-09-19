@@ -14,24 +14,74 @@
   .muted { color: #666; }
   .warn { background:#fdf0ef; border-left:4px solid #c9584f;
           padding:8px 12px; margin:10px 0; color:#7d2f28; }
+
+  /* Tabs. The page had grown to four unrelated jobs in one scroll: what is
+     playing, registering a card, making the artwork for one, and shutting the
+     box down. Scrolling past the shutdown button to reach the card list is a
+     good way to press it by accident. */
+  nav { display:flex; gap:.25rem; border-bottom:2px solid #ddd; margin:1.5rem 0 1rem; }
+  nav button { border:0; background:none; font:inherit; color:#666;
+               padding:.5rem .9rem; cursor:pointer; border-bottom:2px solid transparent;
+               margin-bottom:-2px; }
+  nav button[aria-selected="true"] { color:#111; font-weight:600;
+                                     border-bottom-color:#111; }
+  section[hidden] { display:none; }
+  h2:first-child { margin-top:0; }
+
+  .grid { display:grid; gap:14px; margin-top:1rem;
+          grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); }
+  figure { margin:0; background:#fff; border-radius:6px; overflow:hidden;
+           box-shadow:0 1px 3px rgba(0,0,0,.12); border-top:4px solid transparent; }
+  figure.local  { border-top-color:#9fb89f; }
+  figure.fetched{ border-top-color:#8fa8c8; }
+  figure.suspect{ border-top-color:#e0a63e; }
+  figure.bad    { border-top-color:#c9584f; }
+  figure.skipped{ border-top-color:#bbb; opacity:.55; }
+  figure img { display:block; width:100%; aspect-ratio:1; object-fit:cover;
+               background:#eee; }
+  figure .none { display:flex; aspect-ratio:1; align-items:center;
+                 justify-content:center; background:#efeceb; color:#777;
+                 font-size:.8rem; text-align:center; padding:.5rem; }
+  figcaption { padding:.5rem .6rem .6rem; font-size:.8rem; }
+  figcaption .album { font-weight:600; }
+  figcaption .meta { color:#777; }
+  figcaption .why { font-weight:600; margin-top:.25rem; }
+  figure.suspect .why { color:#a9761c; }
+  figure.bad .why { color:#b2453c; }
+  figcaption button { font-size:.75rem; margin-top:.4rem; }
+  .bar { height:6px; background:#eee; border-radius:3px; overflow:hidden; }
+  .bar > div { height:100%; background:#8fa8c8; width:0; transition:width .3s; }
 </style>
 
 <h1>Jukebox</h1>
 <p id="status" class="muted">…</p>
 <p id="outputs" class="muted">&nbsp;</p>
+<p id="library" class="warn" hidden></p>
+
+<nav id="tabs">
+  <button data-panel="play" aria-selected="true">Now playing</button>
+  <button data-panel="register" aria-selected="false">Register</button>
+  <button data-panel="cards" aria-selected="false">Cards</button>
+  <button data-panel="artwork" aria-selected="false">Artwork</button>
+  <button data-panel="system" aria-selected="false">System</button>
+</nav>
+
+<section id="panel-play">
 <p class="muted">Player controls, volume and speakers live in
   <a id="owntone" href="#">OwnTone</a>.</p>
 
 <p class="muted">Lifting a card pauses the record and putting it back picks up
   where it left off, so this is the only way back to track 1 mid-side.</p>
 <button id="startover" onclick="startOver()">Start over</button>
-<p id="library" class="warn" hidden></p>
 <p id="startovermsg" class="muted">&nbsp;</p>
 
 <p id="mgmtbanner" hidden></p>
 <label><input type="checkbox" id="mgmt" onchange="setMgmt()">
   <strong>Management mode</strong> &mdash; cards identify themselves but do not play</label>
 
+</section>
+
+<section id="panel-register" hidden>
 <h2>Register a card</h2>
 <p>Tap a card on the reader. Its ID appears here.</p>
 <p id="uid">—</p>
@@ -46,15 +96,38 @@
 <label>Name <input id="name" placeholder="(optional)"></label>
 <button id="save">Save</button>
 
+</section>
+
+<section id="panel-artwork" hidden>
+<h2>Card artwork</h2>
+<p class="muted">Finds cover art for albums that have no card yet, then lays it
+  out as A4 sheets of 95&nbsp;mm squares &mdash; the same size as the cards
+  already in the box.</p>
+<p class="muted">A search can return a confidently wrong album, so anything
+  doubtful is flagged. Look before you print.</p>
+<button id="collect" onclick="collect()">Collect artwork</button>
+<button id="sheets" onclick="makeSheets()">Make print sheets</button>
+<label><input type="checkbox" id="refetch"> start again from scratch</label>
+<p id="artmsg" class="muted">&nbsp;</p>
+<div class="bar"><div id="artbar"></div></div>
+<p id="artcount" class="muted">&nbsp;</p>
+<div id="artgrid" class="grid"></div>
+</section>
+
+<section id="panel-system" hidden>
 <h2>Power</h2>
 <p class="muted">Pulling the plug on a running Pi is how SD cards get corrupted.</p>
 <button id="poweroff" onclick="power('poweroff')">Shut down</button>
 <button id="reboot" onclick="power('reboot')">Restart</button>
 <p id="powermsg" class="muted">&nbsp;</p>
 
+</section>
+
+<section id="panel-cards" hidden>
 <h2>Cards</h2>
 <table><thead><tr><th>Name</th><th>Album</th><th>UID</th><th></th></tr></thead>
 <tbody id="cards"></tbody></table>
+</section>
 
 <script>
 // Tracks which card the dropdown was last auto-pointed at, so a selection the
@@ -315,4 +388,157 @@ async function del(uid) {
 }
 document.getElementById('save').addEventListener('click', save);
 loadAlbums(); tick(); setInterval(tick, 1000);
+// --- tabs --------------------------------------------------------------
+// Which panel is showing is kept in the URL hash, so a reload lands you back
+// where you were rather than on "Now playing" every time.
+function showPanel(name) {
+  document.querySelectorAll('#tabs button').forEach(b => {
+    const on = b.dataset.panel === name;
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    document.getElementById('panel-' + b.dataset.panel).hidden = !on;
+  });
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  if (name === 'artwork') loadArtwork();
+}
+document.querySelectorAll('#tabs button').forEach(b =>
+  b.addEventListener('click', () => showPanel(b.dataset.panel)));
+showPanel((location.hash || '#play').slice(1));
+
+// --- artwork -----------------------------------------------------------
+let artPolling = false;
+
+function artFigure(a) {
+  const fig = el('figure');
+  fig.className = a.verdict;
+  if (a.file) {
+    const img = document.createElement('img');
+    img.src = '/artwork-file/' + encodeURIComponent(a.file);
+    img.loading = 'lazy';      // full-resolution art; only fetch what is seen
+    img.decoding = 'async';
+    img.alt = '';
+    fig.append(img);
+  } else {
+    fig.append(el('div', a.why || 'nothing found')).lastChild.className = 'none';
+  }
+  const cap = el('figcaption');
+  const parts = a.album.split('/');
+  cap.append(el('div', parts.slice(1).join('/') || a.album));
+  cap.lastChild.className = 'album';
+  cap.append(el('div', parts[0]));
+  cap.lastChild.className = 'meta';
+  if (a.width) {
+    cap.append(el('div', a.width + '\u00d7' + a.height + ' \u00b7 ' +
+                          (a.source || '').split(':')[0]));
+    cap.lastChild.className = 'meta';
+  }
+  if (a.verdict === 'suspect' || a.verdict === 'bad') {
+    cap.append(el('div', a.why));
+    cap.lastChild.className = 'why';
+    // The matched title is the evidence for the flag, so show it.
+    if (a.source && a.source.includes(':')) {
+      cap.append(el('div', 'matched: ' + a.source.split(':').slice(1).join(':')));
+      cap.lastChild.className = 'meta';
+    }
+  }
+  const fix = el('button', 'Fix\u2026');
+  fix.addEventListener('click', () => fixArtwork(a));
+  cap.append(fix);
+  fig.append(cap);
+  return fig;
+}
+
+async function loadArtwork() {
+  const body = await (await fetch('/api/artwork/manifest')).json();
+  const grid = document.getElementById('artgrid');
+  grid.replaceChildren(...body.albums.map(artFigure));
+
+  const counts = {};
+  body.albums.forEach(a => counts[a.verdict] = (counts[a.verdict] || 0) + 1);
+  document.getElementById('artcount').textContent = body.albums.length
+    ? `${body.albums.length} album(s): ${(counts.local || 0)} from the library, ` +
+      `${(counts.fetched || 0)} fetched, ${(counts.suspect || 0)} to check, ` +
+      `${(counts.bad || 0)} unusable, ${(counts.skipped || 0)} skipped`
+    : 'Nothing collected yet.';
+
+  const bar = document.getElementById('artbar');
+  bar.style.width = body.total ? (100 * body.done / body.total) + '%' : '0';
+  document.getElementById('collect').disabled = body.running;
+  if (body.running) {
+    document.getElementById('artmsg').textContent =
+      `Collecting ${body.done + 1} of ${body.total}` +
+      (body.current ? ' \u2014 ' + body.current : '') + '\u2026';
+    if (!artPolling) { artPolling = true; setTimeout(pollArtwork, 1200); }
+  } else if (artPolling) {
+    artPolling = false;
+    document.getElementById('artmsg').textContent = 'Done.';
+    bar.style.width = '0';
+  }
+}
+async function pollArtwork() { artPolling = false; await loadArtwork(); }
+
+async function collect() {
+  document.getElementById('artmsg').textContent = 'Starting\u2026';
+  const refetch = document.getElementById('refetch').checked;
+  const r = await fetch('/api/artwork/collect',
+    {method: 'POST', headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({refetch})});
+  const body = await r.json();
+  if (!r.ok) { document.getElementById('artmsg').textContent = body.error; return; }
+  if (!body.total) {
+    document.getElementById('artmsg').textContent =
+      'Everything already has artwork. Tick "start again" to redo it.';
+    return;
+  }
+  loadArtwork();
+}
+
+async function fixArtwork(a) {
+  // One prompt with a plain vocabulary, rather than a form with four fields
+  // that are almost never used. Empty clears whatever override was set.
+  const current = a.override
+    ? (a.override.skip ? 'skip: ' + a.override.skip
+       : a.override.url ? a.override.url
+       : (a.override.artist || '') + ' - ' + (a.override.album || ''))
+    : '';
+  const answer = prompt(
+    a.album + '\n\n' +
+    'Search for something else:   Artist - Album\n' +
+    'Use a specific image:        https://\u2026\n' +
+    'Never needs a card:          skip: why\n\n' +
+    'Leave empty to clear.', current);
+  if (answer === null) return;
+  const payload = {album: a.album};
+  const text = answer.trim();
+  if (text.startsWith('skip:')) payload.skip = text.slice(5).trim() || 'not a record';
+  else if (/^https?:\/\//i.test(text)) payload.url = text;
+  else if (text.includes(' - ')) {
+    payload.artist = text.split(' - ')[0].trim();
+    payload.album_name = text.split(' - ').slice(1).join(' - ').trim();
+  } else if (text) payload.album_name = text;
+  const r = await fetch('/api/artwork/override',
+    {method: 'PUT', headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify(payload)});
+  if (r.ok) {
+    document.getElementById('artmsg').textContent =
+      'Saved. Collect again to pick it up.';
+    loadArtwork();
+  }
+}
+
+async function makeSheets() {
+  document.getElementById('artmsg').textContent = 'Building\u2026';
+  const r = await fetch('/api/artwork/sheets',
+    {method: 'POST', headers: {'Content-Type': 'application/json'},
+     body: JSON.stringify({})});
+  const body = await r.json();
+  if (!r.ok) { document.getElementById('artmsg').textContent = body.error; return; }
+  const msg = document.getElementById('artmsg');
+  msg.replaceChildren(
+    document.createTextNode(`${body.cards} card(s) on ${body.pages} A4 page(s). `));
+  const link = el('a', 'Download the PDF');
+  link.href = '/artwork-file/cards-to-print.pdf';
+  link.download = 'cards-to-print.pdf';
+  msg.append(link);
+}
+
 </script>

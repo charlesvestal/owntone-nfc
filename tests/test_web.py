@@ -1,3 +1,6 @@
+import json
+import threading
+import time
 import pytest
 
 from nfc_jukebox.cards import Card, CardStore
@@ -469,3 +472,172 @@ def test_a_broken_mount_is_reported_rather_than_raising(app_ctx, monkeypatch):
 
     assert body["library_ok"] is False
     assert "No such device" in body["library_error"]
+
+
+# --- artwork studio ----------------------------------------------------
+#
+# Collecting artwork, judging what came back and printing the sheets are all
+# part of making a card, so they belong on the page that makes cards. The
+# fetching itself is injected: it talks to the internet, takes minutes, and
+# none of that belongs in a test.
+
+
+def _studio(tmp_path, collector=None, manifest=None):
+    (tmp_path / "Miles Davis" / "Kind of Blue").mkdir(parents=True)
+    art = tmp_path / "art"
+    art.mkdir()
+    if manifest is not None:
+        (art / "manifest.json").write_text(json.dumps(manifest))
+    config = Config(library_root=tmp_path, cards_file=tmp_path / "cards.yaml",
+                    artwork_dir=art)
+    store = CardStore(config.cards_file)
+    controller = Controller(FakeOwnTone(), store, FakeSnapshot(), config,
+                            clock=FakeClock())
+    app = create_app(config, controller, store, collector=collector)
+    app.config.update(TESTING=True)
+    return app.test_client(), art
+
+
+def test_artwork_manifest_is_empty_before_anything_is_collected(tmp_path):
+    client, _ = _studio(tmp_path)
+    body = client.get("/api/artwork/manifest").get_json()
+    assert body["albums"] == []
+    assert body["running"] is False
+
+
+def test_artwork_manifest_reports_what_was_collected(tmp_path):
+    client, _ = _studio(tmp_path, manifest={
+        "Miles Davis/Kind of Blue": {
+            "status": "ok", "file": "x.jpg", "width": 1400, "height": 1400,
+            "source": "itunes:Miles Davis - Kind of Blue", "score": 1.0},
+    })
+    body = client.get("/api/artwork/manifest").get_json()
+    assert len(body["albums"]) == 1
+    entry = body["albums"][0]
+    assert entry["album"] == "Miles Davis/Kind of Blue"
+    assert entry["verdict"] == "fetched"
+
+
+def test_a_questionable_match_is_flagged_for_review(tmp_path):
+    """The whole point of the review step: a search returned something, and it
+    looks like a different record."""
+    client, _ = _studio(tmp_path, manifest={
+        "Liquid Mike/S_T": {
+            "status": "ok", "file": "x.jpg", "width": 3000, "height": 3000,
+            "source": "itunes:Liquid Mike - Paul Bunyan's Slingshot",
+            "score": 0.37},
+    })
+    body = client.get("/api/artwork/manifest").get_json()
+    assert body["albums"][0]["verdict"] == "suspect"
+
+
+def test_collecting_runs_in_the_background_and_reports_progress(tmp_path):
+    """A run over a whole library takes minutes, so the request must not wait
+    for it -- the page polls instead."""
+    seen = []
+
+    def collector(album_path, out_dir, library_root, overrides):
+        seen.append(album_path)
+        return {"status": "ok", "file": "x.jpg", "width": 1200,
+                "height": 1200, "source": "itunes:x", "score": 1.0}
+
+    client, art = _studio(tmp_path, collector=collector)
+    started = client.post("/api/artwork/collect").get_json()
+    assert started["started"] is True
+
+    for _ in range(200):
+        body = client.get("/api/artwork/manifest").get_json()
+        if not body["running"]:
+            break
+        time.sleep(0.01)
+
+    assert seen == ["Miles Davis/Kind of Blue"]
+    assert len(body["albums"]) == 1
+    assert json.loads((art / "manifest.json").read_text())
+
+
+def test_collecting_twice_at_once_is_refused_rather_than_doubled(tmp_path):
+    release = threading.Event()
+
+    def collector(album_path, out_dir, library_root, overrides):
+        release.wait(2)
+        return {"status": "missing"}
+
+    client, _ = _studio(tmp_path, collector=collector)
+    assert client.post("/api/artwork/collect").get_json()["started"] is True
+    second = client.post("/api/artwork/collect")
+    assert second.status_code == 409
+    release.set()
+
+
+def test_a_failing_collector_does_not_kill_the_run(tmp_path):
+    """One album that raises must not leave the page thinking a run is still
+    in progress for ever."""
+    def collector(album_path, out_dir, library_root, overrides):
+        raise RuntimeError("iTunes fell over")
+
+    client, _ = _studio(tmp_path, collector=collector)
+    client.post("/api/artwork/collect")
+    for _ in range(200):
+        body = client.get("/api/artwork/manifest").get_json()
+        if not body["running"]:
+            break
+        time.sleep(0.01)
+    assert body["running"] is False
+    assert body["albums"][0]["status"] == "missing"
+
+
+def test_an_override_is_saved_and_shows_on_the_entry(tmp_path):
+    client, art = _studio(tmp_path)
+    response = client.put("/api/artwork/override",
+                          json={"album": "Liquid Mike/S_T",
+                                "album_name": "Liquid Mike"})
+    assert response.status_code == 200
+    saved = json.loads((art / "overrides.json").read_text())
+    assert saved["Liquid Mike/S_T"]["album"] == "Liquid Mike"
+
+
+def test_an_override_can_skip_an_album_entirely(tmp_path):
+    client, art = _studio(tmp_path)
+    client.put("/api/artwork/override",
+               json={"album": "ZZ Test/Stereo Test", "skip": "test disc"})
+    saved = json.loads((art / "overrides.json").read_text())
+    assert saved["ZZ Test/Stereo Test"]["skip"] == "test disc"
+
+
+def test_clearing_an_override_removes_it(tmp_path):
+    client, art = _studio(tmp_path)
+    client.put("/api/artwork/override", json={"album": "A/B", "skip": "x"})
+    client.put("/api/artwork/override", json={"album": "A/B"})
+    assert json.loads((art / "overrides.json").read_text()) == {}
+
+
+def test_an_override_without_an_album_is_a_400(tmp_path):
+    client, _ = _studio(tmp_path)
+    assert client.put("/api/artwork/override", json={"skip": "x"}).status_code == 400
+
+
+def test_artwork_images_are_served_from_the_artwork_directory(tmp_path):
+    client, art = _studio(tmp_path, manifest={
+        "A/B": {"status": "ok", "file": "pic.jpg", "width": 1200,
+                "height": 1200, "source": "itunes:x", "score": 1.0}})
+    (art / "pic.jpg").write_bytes(b"\xff\xd8\xff\xe0not-really-a-jpeg")
+    response = client.get("/artwork-file/pic.jpg")
+    assert response.status_code == 200
+    assert response.data.startswith(b"\xff\xd8")
+
+
+def test_artwork_file_paths_cannot_escape_the_directory(tmp_path):
+    """The name comes from a URL, so it is attacker-controlled by definition.
+
+    Following redirects on purpose: Flask normalises a doubled slash with a
+    308 before the handler ever sees it, and what matters is where you end up,
+    not that the first hop was a refusal.
+    """
+    client, _ = _studio(tmp_path)
+    (tmp_path / "cards.yaml").write_text("secret: yes")
+    for name in ("../cards.yaml", "..%2Fcards.yaml", "/etc/passwd",
+                 "....//cards.yaml"):
+        response = client.get(f"/artwork-file/{name}", follow_redirects=True)
+        assert response.status_code in (400, 404), name
+        assert b"secret" not in response.data

@@ -115,3 +115,23 @@ fine printed, rather than a textbook number. Change it with `--min-px`.
 | `make_review.py` | builds `review.html` |
 | `make_sheets.py` | builds the print-ready A4 PDF |
 | `artlib.py` | image headers, search terms, match scoring (tested in `tests/test_cardart.py`) |
+
+## On the jukebox itself
+
+All of this is on the admin page under **Artwork** — collecting, reviewing,
+pinning the ones a search got wrong, and building the print sheets. That is
+where it belongs: the Pi is the machine with both the music library and the
+network connection, and making artwork is part of making a card.
+
+The scripts here are the same code with a command line on it, for when you
+would rather drive it from a terminal.
+
+Two things to know about the page:
+
+- **Collecting runs in the background.** A library's worth takes minutes, so
+  the page starts it and polls; you can leave the tab. One album that fails
+  does not stop the rest.
+- **The review grid loads full-resolution art** — the same files that go to the
+  printer, so a whole library is tens of megabytes. Images load only as you
+  scroll to them and are cached for a day, so it is the first look that costs
+  anything.

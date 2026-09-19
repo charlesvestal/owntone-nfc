@@ -35,3 +35,8 @@ web_port: 8080
 # Set to null on a board with no RSTPDN jumper, or change it if yours is
 # jumpered elsewhere.
 reset_gpio: 20
+
+# Collected cover art and the print-ready card sheets. Derived data -- it can
+# be rebuilt from the library and the internet at any time -- so it lives with
+# the state rather than the configuration.
+artwork_dir: /var/lib/nfc-jukebox/artwork
