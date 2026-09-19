@@ -3,7 +3,9 @@
 A slanted face that holds the card like a record on a shelf, with the Pi
 mounted directly behind it and **the back left open**.
 
-![elevations](stand-elevations.png)
+![render](stand-render.png)
+
+Rendered above: front, and the open back.
 
 The open back is the whole idea. The Pi's ports face into it, so cables plug
 straight into the board — no panel cutouts to get wrong, no internal extension
@@ -49,6 +51,25 @@ window. The default assumes the antenna is off to one side, as on this HAT.
 
 The panel is thinned **from behind**, so the outside stays flat and rigid
 while the reader only has `window_t` of plastic to see through.
+
+## Design notes
+
+Every visible edge is chamfered and the vertical corners radiused, so the form
+catches light along its arrises instead of showing a raw printed corner. A
+**shadow reveal** runs round the base, which lifts the body optically and hides
+the layer banding a first print always shows low down where the part is widest.
+The top is **cut back** rather than coming to a point, so the silhouette reads
+as a cabinet rather than a wedge.
+
+The card drops into a **shallow rebate** in the face rather than leaning on an
+applied shelf, so the front is one clean horizontal line. There is deliberately
+no thumb notch: the card leans proud in the rebate and lifts out by its face,
+and a scallop cut in the panel reads as damage rather than detail.
+
+`face_w` takes the **larger** of "wide enough for the card" and "wide enough for
+the Pi wherever your tag offset puts it". That second case is not hypothetical —
+a mounting boss that lands on the side wall merges into it, vanishes from the
+render, and is only discovered when the Pi won't screw down.
 
 ## Printing notes
 
