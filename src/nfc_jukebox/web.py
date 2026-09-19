@@ -13,9 +13,10 @@ from pathlib import Path
 
 from urllib.parse import urlparse
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.exceptions import BadRequest
 
+from .cardart import collect as cardart_collect
 from .cards import Card, name_for_path, normalise_uid
 
 log = logging.getLogger(__name__)
@@ -31,7 +32,8 @@ def _run_power(action: str) -> None:
     subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def create_app(config, controller, store, owntone=None, power=None) -> Flask:
+def create_app(config, controller, store, owntone=None, power=None,
+               collector=None) -> Flask:
     # Where sound will come out. Polled once a second by the page, so cached
     # briefly rather than asking OwnTone every time - the answer changes only
     # when someone picks different speakers.
@@ -210,28 +212,204 @@ def create_app(config, controller, store, owntone=None, power=None) -> Flask:
             log.warning("Artwork lookup failed for %s", path, exc_info=True)
             return jsonify(url=None)
 
-    @app.get("/api/albums")
-    def albums():
+
+    def _album_rows():
+        """Every album in the library, and whether it already has a card.
+
+        Shared with the artwork studio, which collects art for exactly the
+        albums that do not have one yet.
+
+        With a library far larger than the number of cards, "what still needs
+        one" is the question being asked while registering - and assigning a
+        second card to an album you have already done is otherwise invisible
+        until you tap it.
+        """
         root = Path(config.library_root)
         found = sorted(
             str(path.relative_to(root))
             for path in root.glob("*/*")
             if path.is_dir()
         )
-        # Which albums already have a card. With a library far larger than the
-        # number of cards, "what still needs one" is the question being asked
-        # while registering - and assigning a second card to an album you have
-        # already done is otherwise invisible until you tap it.
         assigned = {c.path: c.name for c in store.load().values()}
-        return jsonify(
-            albums=[
-                {"path": path,
+        return [{"path": path,
                  "assigned": path in assigned,
-                 "card_name": assigned.get(path)}
-                for path in found
-            ],
-            total=len(found),
-            unassigned=sum(1 for path in found if path not in assigned),
+                 "card_name": assigned.get(path)} for path in found]
+
+    # --- artwork studio ---------------------------------------------------
+    #
+    # Collecting artwork, judging what came back, pinning the ones a search got
+    # wrong and printing the sheets are all part of making a card, and making
+    # cards is what this page is for. It ran as a pile of scripts on a laptop
+    # first, which meant the one machine that has the library and the network
+    # was not the machine doing the work.
+    #
+    # `collector` is injected so tests never reach the internet: collecting one
+    # album talks to three services and takes seconds, and a whole library
+    # takes minutes.
+
+    _collect_lock = threading.Lock()
+    _collect_state: dict = {"running": False, "done": 0, "total": 0, "album": None}
+
+    def _artwork_dir() -> str:
+        return str(config.artwork_dir)
+
+    def _collect_one(album_path, out_dir, library_root, overrides):
+        if collector is not None:
+            return collector(album_path, out_dir, library_root, overrides)
+        from .cardart import collect_album
+        return collect_album(album_path, out_dir, library_root, overrides)
+
+    def _run_collection(targets):
+        """Walk the albums, saving after each one.
+
+        Saving as it goes rather than at the end: a run takes minutes, and a
+        network wobble half way through should not throw away the half that
+        worked.
+        """
+        out_dir = _artwork_dir()
+        try:
+            overrides = cardart_collect.load_overrides(out_dir)
+            manifest = cardart_collect.load_manifest(out_dir)
+            for album_path in targets:
+                _collect_state["album"] = album_path
+                try:
+                    entry = _collect_one(album_path, out_dir,
+                                         str(config.library_root), overrides)
+                except Exception:                       # noqa: BLE001
+                    # One album that cannot be fetched is not a reason to
+                    # abandon the rest, or to leave the page believing a run is
+                    # still going.
+                    log.exception("Collecting artwork for %s failed", album_path)
+                    entry = {"status": "missing"}
+                manifest[album_path] = entry
+                cardart_collect.save_manifest(out_dir, manifest)
+                _collect_state["done"] += 1
+        finally:
+            _collect_state["running"] = False
+            _collect_state["album"] = None
+
+    @app.get("/api/artwork/manifest")
+    def artwork_manifest():
+        from .cardart import classify
+        out_dir = _artwork_dir()
+        manifest = cardart_collect.load_manifest(out_dir)
+        overrides = cardart_collect.load_overrides(out_dir)
+        albums = []
+        for album_path, entry in sorted(manifest.items()):
+            verdict, why = classify(entry, 0)
+            albums.append({
+                "album": album_path,
+                "status": entry.get("status"),
+                "file": entry.get("file"),
+                "width": entry.get("width"),
+                "height": entry.get("height"),
+                "source": entry.get("source"),
+                "score": entry.get("score"),
+                "verdict": verdict,
+                "why": why,
+                "override": overrides.get(album_path),
+            })
+        return jsonify(albums=albums, running=_collect_state["running"],
+                       done=_collect_state["done"], total=_collect_state["total"],
+                       current=_collect_state["album"])
+
+    @app.post("/api/artwork/collect")
+    def artwork_collect():
+        payload = request.get_json(silent=True) or {}
+        with _collect_lock:
+            if _collect_state["running"]:
+                return jsonify(error="A collection is already running."), 409
+            targets = [a["path"] for a in _album_rows()
+                       if payload.get("all") or not a["assigned"]]
+            if not payload.get("refetch"):
+                manifest = cardart_collect.load_manifest(_artwork_dir())
+                overrides = cardart_collect.load_overrides(_artwork_dir())
+                targets = [t for t in targets
+                           if manifest.get(t, {}).get("status") != "ok"
+                           or bool(overrides.get(t)) != bool(manifest.get(t, {}).get("override"))]
+            _collect_state.update(running=True, done=0, total=len(targets),
+                                  album=None)
+        threading.Thread(target=_run_collection, args=(targets,),
+                         daemon=True).start()
+        return jsonify(started=True, total=len(targets))
+
+    @app.put("/api/artwork/override")
+    def artwork_override():
+        """Pin an album a search got wrong, or mark one as never needing a card.
+
+        An empty body for an album clears its override, so the page has one
+        control rather than an add and a separate remove.
+        """
+        payload = request.get_json(silent=True) or {}
+        album = payload.get("album")
+        if not album:
+            return jsonify(error="Which album?"), 400
+        out_dir = _artwork_dir()
+        overrides = cardart_collect.load_overrides(out_dir)
+        entry = {}
+        for key, field in (("artist", "artist"), ("album_name", "album"),
+                           ("url", "url"), ("skip", "skip")):
+            if payload.get(key):
+                entry[field] = payload[key]
+        if entry:
+            overrides[album] = entry
+        else:
+            overrides.pop(album, None)
+        cardart_collect.save_overrides(out_dir, overrides)
+        return jsonify(album=album, override=overrides.get(album))
+
+    @app.post("/api/artwork/sheets")
+    def artwork_sheets():
+        from .cardart import build_sheets
+        payload = request.get_json(silent=True) or {}
+        out_dir = _artwork_dir()
+        target = os.path.join(out_dir, "cards-to-print.pdf")
+        try:
+            result = build_sheets(out_dir, target,
+                                  int(payload.get("min_px") or 0),
+                                  bool(payload.get("include_suspect")))
+        except FileNotFoundError:
+            return jsonify(error="No artwork collected yet."), 409
+        except Exception as exc:                        # noqa: BLE001
+            log.exception("Building the print sheets failed")
+            return jsonify(error=f"Could not build the sheets: {exc}"), 500
+        if not result["cards"]:
+            return jsonify(error="Nothing to print yet."), 409
+        return jsonify(**result)
+
+    @app.get("/artwork-file/<path:name>")
+    def artwork_file(name):
+        """Serve a collected image, or the print sheets.
+
+        The name arrives in a URL, so it is attacker-controlled: resolve it and
+        check it really is inside the artwork directory rather than trusting
+        that a ".." was caught by the router.
+        """
+        root = Path(_artwork_dir()).resolve()
+        try:
+            target = (root / name).resolve()
+            target.relative_to(root)
+        except (ValueError, OSError):
+            return jsonify(error="No."), 400
+        if not target.is_file():
+            return jsonify(error="Not found."), 404
+        response = send_file(target)
+        # The collected art is full resolution -- 3000px squares, ~60MB for a
+        # library's worth -- because that is what has to go to the printer.
+        # The review grid shows the same files as thumbnails, so cache them:
+        # the first look costs what it costs, and every look after is free.
+        # A file only changes when it is re-collected, and then its whole
+        # entry changes with it.
+        response.headers["Cache-Control"] = "private, max-age=86400"
+        return response
+
+    @app.get("/api/albums")
+    def albums():
+        rows = _album_rows()
+        return jsonify(
+            albums=rows,
+            total=len(rows),
+            unassigned=sum(1 for row in rows if not row["assigned"]),
         )
 
     @app.get("/api/cards")

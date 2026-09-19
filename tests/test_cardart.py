@@ -14,11 +14,9 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "tools", "cardart"))
-
-from artlib import (CONFIDENT, MATCH_FLOOR, image_size, jpeg_size,  # noqa: E402
-                    png_size, rank_candidates, search_terms, slug, title_match)
+from nfc_jukebox.cardart import (CONFIDENT, MATCH_FLOOR, image_size,
+                                 jpeg_size, png_size, rank_candidates,
+                                 search_terms, slug, title_match)
 
 
 # --- image headers ---------------------------------------------------------

@@ -29,6 +29,10 @@ class Config:
     library_root: Path = Path("/srv/music")
     cards_file: Path = Path("/etc/nfc-jukebox/cards.yaml")
     outputs_file: Path = Path("/var/lib/nfc-jukebox/outputs.json")
+    # Where collected cover art and the print-ready sheets live. Under the
+    # state directory rather than /etc: it is derived data, rebuildable at any
+    # time from the library and the internet, and some of it is megabytes.
+    artwork_dir: Path = Path("/var/lib/nfc-jukebox/artwork")
     reader_device: str = "tty:AMA0:pn532"
     # How long a card must be continuously unseen before the reader calls it
     # lifted. See reader.DEFAULT_PRESENCE_DEBOUNCE_S for the measurements: a
@@ -58,7 +62,7 @@ class Config:
     # retries, which is what it did before this existed.
     reset_gpio: int | None = 20
 
-    _PATH_FIELDS = ("library_root", "cards_file", "outputs_file")
+    _PATH_FIELDS = ("library_root", "cards_file", "outputs_file", "artwork_dir")
     _STR_FIELDS = ("owntone_url", "reader_device")
     _POSITIVE_FLOAT_FIELDS = ("presence_debounce_s", "grace_period_s")
 
