@@ -17,7 +17,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.exceptions import BadRequest
 
 from .cardart import collect as cardart_collect
-from .cards import Card, name_for_path, normalise_uid
+from .cards import Card, duplicate_paths, name_for_path, normalise_uid
 
 log = logging.getLogger(__name__)
 
@@ -288,6 +288,14 @@ def create_app(config, controller, store, owntone=None, power=None,
             _collect_state["running"] = False
             _collect_state["album"] = None
 
+    def _file_mtime(out_dir, name):
+        if not name:
+            return None
+        try:
+            return os.path.getmtime(os.path.join(out_dir, name))
+        except OSError:
+            return None
+
     @app.get("/api/artwork/manifest")
     def artwork_manifest():
         from .cardart import classify
@@ -308,6 +316,10 @@ def create_app(config, controller, store, owntone=None, power=None,
                 "verdict": verdict,
                 "why": why,
                 "override": overrides.get(album_path),
+                # Versions the image URL. Artwork is replaced in place under a
+                # stable filename, so without this the browser keeps whatever
+                # it cached and a re-pinned cover never appears.
+                "mtime": _file_mtime(out_dir, entry.get("file")),
             })
         return jsonify(albums=albums, running=_collect_state["running"],
                        done=_collect_state["done"], total=_collect_state["total"],
@@ -356,7 +368,35 @@ def create_app(config, controller, store, owntone=None, power=None,
         else:
             overrides.pop(album, None)
         cardart_collect.save_overrides(out_dir, overrides)
-        return jsonify(album=album, override=overrides.get(album))
+
+        # Apply it now rather than recording the intent and waiting for a
+        # Collect run. Saving without collecting leaves the page showing the
+        # old art, which reads as the override having failed.
+        with _collect_lock:
+            if _collect_state["running"]:
+                # Two writers to manifest.json would lose an update -- the bulk
+                # run saves after every album. Leave it to that run instead.
+                return jsonify(album=album, override=overrides.get(album),
+                               collected=False,
+                               error="A collection is running; it will pick "
+                                     "this up.")
+        try:
+            collected = _collect_one(album, out_dir,
+                                     str(config.library_root), overrides)
+        except Exception:                               # noqa: BLE001
+            log.exception("Collecting artwork for %s failed", album)
+            collected = {"status": "missing"}
+        manifest = cardart_collect.load_manifest(out_dir)
+        manifest[album] = collected
+        cardart_collect.save_manifest(out_dir, manifest)
+
+        # A dead link is an ordinary outcome, not an exception. Report it and
+        # keep the override, so the URL can be edited rather than retyped.
+        error = None
+        if collected.get("status") not in ("ok", "skipped"):
+            error = "Saved, but nothing could be fetched for that."
+        return jsonify(album=album, override=overrides.get(album),
+                       entry=collected, collected=True, error=error)
 
     @app.post("/api/artwork/sheets")
     def artwork_sheets():
@@ -400,7 +440,13 @@ def create_app(config, controller, store, owntone=None, power=None,
         # the first look costs what it costs, and every look after is free.
         # A file only changes when it is re-collected, and then its whole
         # entry changes with it.
-        response.headers["Cache-Control"] = "private, max-age=86400"
+        # Cached forever, because the page versions the URL with the file's
+        # mtime: a given URL always means the same bytes. Replaced artwork
+        # arrives under a new URL and is fetched exactly once, so months
+        # between prints cost no requests at all. `immutable` matters as well
+        # as the max-age -- without it a plain reload revalidates everything.
+        response.headers["Cache-Control"] = ("public, max-age=31536000, "
+                                             "immutable")
         return response
 
     @app.get("/api/albums")
@@ -414,9 +460,14 @@ def create_app(config, controller, store, owntone=None, power=None,
 
     @app.get("/api/cards")
     def list_cards():
+        # Flagged here rather than in the page: the store is already loaded,
+        # so it costs one pass, and the page stays a renderer.
+        cards = store.load()
+        duplicated = duplicate_paths(cards)
         return jsonify(cards=[
-            {"uid": c.uid, "name": c.name, "path": c.path}
-            for c in store.load().values()
+            {"uid": c.uid, "name": c.name, "path": c.path,
+             "duplicate": c.path in duplicated}
+            for c in cards.values()
         ])
 
     @app.post("/api/cards")
@@ -473,4 +524,6 @@ def create_app(config, controller, store, owntone=None, power=None,
             return jsonify(error=f"Could not write the card registry: {exc}"), 500
         return "", 204
 
+    # Seam for tests that need to act as though a bulk run is in flight.
+    app.extensions["collect_state"] = _collect_state
     return app

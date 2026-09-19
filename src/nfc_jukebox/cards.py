@@ -43,6 +43,26 @@ class Card:
     path: str  # relative to the library root
 
 
+def duplicate_paths(cards: dict[str, Card]) -> dict[str, list[str]]:
+    """Album paths claimed by more than one card, path -> sorted UIDs.
+
+    Every album is meant to have exactly one card, so anything in here is a
+    registration mistake. Nothing in the store prevents one -- the registry is
+    keyed by UID, and two UIDs pointing at one album are perfectly valid to it
+    -- and with a hundred-odd cards the error is invisible until two of them
+    turn out to play the same record.
+
+    The album path is the identity, matching the rest of the system. `name` is
+    a label a human typed and is deliberately ignored: two cards labelled
+    differently for the same album are still two cards for one album.
+    """
+    by_path: dict[str, list[str]] = {}
+    for card in cards.values():
+        by_path.setdefault(card.path, []).append(card.uid)
+    return {path: sorted(uids)
+            for path, uids in by_path.items() if len(uids) > 1}
+
+
 class CardStore:
     def __init__(self, path: Path) -> None:
         self._path = Path(path)

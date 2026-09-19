@@ -482,6 +482,14 @@ def test_a_broken_mount_is_reported_rather_than_raising(app_ctx, monkeypatch):
 # none of that belongs in a test.
 
 
+def _offline_collector(album_path, out_dir, library_root, overrides):
+    """Stands in for the real fetcher so no test ever reaches the network.
+
+    Tests that care what the collector did pass their own.
+    """
+    return {"status": "missing"}
+
+
 def _studio(tmp_path, collector=None, manifest=None):
     (tmp_path / "Miles Davis" / "Kind of Blue").mkdir(parents=True)
     art = tmp_path / "art"
@@ -493,7 +501,8 @@ def _studio(tmp_path, collector=None, manifest=None):
     store = CardStore(config.cards_file)
     controller = Controller(FakeOwnTone(), store, FakeSnapshot(), config,
                             clock=FakeClock())
-    app = create_app(config, controller, store, collector=collector)
+    app = create_app(config, controller, store,
+                     collector=collector or _offline_collector)
     app.config.update(TESTING=True)
     return app.test_client(), art
 
@@ -641,3 +650,157 @@ def test_artwork_file_paths_cannot_escape_the_directory(tmp_path):
         response = client.get(f"/artwork-file/{name}", follow_redirects=True)
         assert response.status_code in (400, 404), name
         assert b"secret" not in response.data
+
+
+# --- duplicate cards -------------------------------------------------------
+
+
+def _register(client, uid, path):
+    return client.post("/api/cards", json={"uid": uid, "path": path})
+
+
+def test_cards_are_not_flagged_when_every_album_has_one_card(app_ctx):
+    client, _, _ = app_ctx
+    _register(client, "aa", "Miles Davis/Kind of Blue")
+    _register(client, "bb", "Fleetwood Mac/Rumours")
+    cards = client.get("/api/cards").get_json()["cards"]
+    assert [c["duplicate"] for c in cards] == [False, False]
+
+
+def test_both_cards_on_one_album_are_flagged_as_duplicates(app_ctx):
+    client, _, _ = app_ctx
+    _register(client, "aa", "Miles Davis/Kind of Blue")
+    _register(client, "bb", "Miles Davis/Kind of Blue")
+    _register(client, "cc", "Fleetwood Mac/Rumours")
+    flagged = {c["uid"]: c["duplicate"]
+               for c in client.get("/api/cards").get_json()["cards"]}
+    assert flagged == {"aa": True, "bb": True, "cc": False}
+
+
+# --- artwork caching -------------------------------------------------------
+#
+# Artwork is replaced in place under a stable filename, so a long max-age with
+# no version in the URL served a stale image for a day. The manifest carries
+# each file's mtime and the page versions the URL with it, which lets the
+# response be cached forever and still update the moment the bytes change.
+
+
+@pytest.fixture
+def art_ctx(tmp_path):
+    """An app whose artwork directory is a real directory we can write."""
+    art = tmp_path / "artwork"
+    art.mkdir()
+    config = Config(library_root=tmp_path, cards_file=tmp_path / "cards.yaml",
+                    artwork_dir=art)
+    store = CardStore(config.cards_file)
+    controller = Controller(FakeOwnTone(), store, FakeSnapshot(), config,
+                            clock=FakeClock())
+    app = create_app(config, controller, store)
+    app.config.update(TESTING=True)
+    return app.test_client(), art
+
+
+def _manifest(art, entry):
+    import json
+    (art / "manifest.json").write_text(
+        json.dumps({"Miles Davis/Kind of Blue": entry}))
+
+
+def test_a_collected_file_carries_its_mtime(art_ctx):
+    client, art = art_ctx
+    (art / "cover.jpg").write_bytes(b"\xff\xd8jpeg")
+    _manifest(art, {"status": "ok", "file": "cover.jpg",
+                    "width": 3000, "height": 3000})
+    row = client.get("/api/artwork/manifest").get_json()["albums"][0]
+    assert row["mtime"] == pytest.approx((art / "cover.jpg").stat().st_mtime)
+
+
+def test_a_missing_file_has_no_mtime(art_ctx):
+    client, art = art_ctx
+    _manifest(art, {"status": "missing"})
+    row = client.get("/api/artwork/manifest").get_json()["albums"][0]
+    assert row["mtime"] is None
+
+
+def test_artwork_is_cached_forever_and_immutable(art_ctx):
+    client, art = art_ctx
+    (art / "cover.jpg").write_bytes(b"\xff\xd8jpeg")
+    cache = client.get("/artwork-file/cover.jpg").headers["Cache-Control"]
+    assert "immutable" in cache
+    assert "max-age=31536000" in cache
+
+
+def test_a_version_parameter_does_not_defeat_the_traversal_check(art_ctx):
+    client, _ = art_ctx
+    assert client.get("/artwork-file/../../etc/passwd?v=1").status_code in (400, 404)
+
+
+# --- overrides apply immediately -------------------------------------------
+#
+# Setting an override used to record the intent and stop there, leaving the
+# page showing the old art until a separate Collect run. That reads as "it
+# didn't work", so the override now collects that one album on the spot.
+
+
+def test_pinning_a_url_collects_that_album_at_once(tmp_path):
+    seen = []
+
+    def collector(album_path, out_dir, library_root, overrides):
+        seen.append((album_path, overrides.get(album_path)))
+        return {"status": "ok", "file": "cover.jpg", "width": 1425,
+                "height": 1425, "source": "override:http://x/y.jpg",
+                "score": 1.0, "override": True}
+
+    client, art = _studio(tmp_path, collector=collector)
+    body = client.put("/api/artwork/override",
+                      json={"album": "A/B", "url": "http://x/y.jpg"}).get_json()
+
+    assert seen == [("A/B", {"url": "http://x/y.jpg"})]
+    assert body["collected"] is True
+    assert body["entry"]["source"] == "override:http://x/y.jpg"
+    # ...and it is persisted, not merely returned.
+    import json
+    saved = json.loads((art / "manifest.json").read_text())
+    assert saved["A/B"]["source"] == "override:http://x/y.jpg"
+
+
+def test_clearing_an_override_re_collects(tmp_path):
+    seen = []
+
+    def collector(album_path, out_dir, library_root, overrides):
+        seen.append(overrides.get(album_path))
+        return {"status": "ok", "file": "c.jpg", "width": 3000, "height": 3000}
+
+    client, _ = _studio(tmp_path, collector=collector)
+    client.put("/api/artwork/override", json={"album": "A/B", "url": "http://x"})
+    client.put("/api/artwork/override", json={"album": "A/B"})
+    assert seen == [{"url": "http://x"}, None]
+
+
+def test_a_dead_url_reports_an_error_but_keeps_the_override(tmp_path):
+    """So the user can edit the URL rather than retype it."""
+    def collector(album_path, out_dir, library_root, overrides):
+        return {"status": "missing"}
+
+    client, art = _studio(tmp_path, collector=collector)
+    body = client.put("/api/artwork/override",
+                      json={"album": "A/B", "url": "http://dead"}).get_json()
+    assert body["error"]
+    import json
+    assert json.loads((art / "overrides.json").read_text())["A/B"] == {
+        "url": "http://dead"}
+
+
+def test_an_override_during_a_running_collection_does_not_write_the_manifest(tmp_path):
+    from nfc_jukebox import web as web_module
+
+    def collector(*a, **k):                       # pragma: no cover - not called
+        raise AssertionError("must not collect while a run is in flight")
+
+    client, art = _studio(tmp_path, collector=collector)
+    # Simulate a bulk run in flight.
+    client.application.extensions["collect_state"]["running"] = True
+    body = client.put("/api/artwork/override",
+                      json={"album": "A/B", "url": "http://x"}).get_json()
+    assert body["collected"] is False
+    assert not (art / "manifest.json").exists()

@@ -12,6 +12,12 @@
   #album { width: 100%; font-family: ui-monospace, monospace; font-size: .85rem; }
   label { display: block; margin: .3rem 0; }
   .muted { color: #666; }
+  /* A duplicate is always a registration mistake, so it is marked rather than
+     merely tinted: colour alone would not survive a glance down 130 rows. */
+  tr.dup td { background: #fff4f4; }
+  tr.dup td:first-child::before { content: '\26A0\FE0E'; margin-right: .4rem; }
+  #dupwarn { color: #b00; font-weight: 600; }
+  #dupwarn[hidden] { display: none; }
   .warn { background:#fdf0ef; border-left:4px solid #c9584f;
           padding:8px 12px; margin:10px 0; color:#7d2f28; }
 
@@ -125,6 +131,7 @@
 
 <section id="panel-cards" hidden>
 <h2>Cards</h2>
+<p id="dupwarn" hidden></p>
 <table><thead><tr><th>Name</th><th>Album</th><th>UID</th><th></th></tr></thead>
 <tbody id="cards"></tbody></table>
 </section>
@@ -152,6 +159,7 @@ function el(tag, text) {
 }
 function cardRow(card) {
   const tr = el('tr');
+  if (card.duplicate) tr.className = 'dup';
   tr.append(el('td', card.name), el('td', card.path), el('td', card.uid));
   const button = el('button', 'Delete');
   button.addEventListener('click', () => del(card.uid));
@@ -229,6 +237,13 @@ async function refresh() {
   const c = await (await fetch('/api/cards')).json();
   if (Array.isArray(c.cards)) {
     document.getElementById('cards').replaceChildren(...c.cards.map(cardRow));
+    // Count albums, not cards: three cards on one record is one mistake.
+    const albums = new Set(c.cards.filter(x => x.duplicate).map(x => x.path));
+    const warn = document.getElementById('dupwarn');
+    warn.hidden = albums.size === 0;
+    warn.textContent = albums.size === 1
+      ? '1 album has more than one card.'
+      : albums.size + ' albums have more than one card.';
   }
 }
 
@@ -412,7 +427,10 @@ function artFigure(a) {
   fig.className = a.verdict;
   if (a.file) {
     const img = document.createElement('img');
-    img.src = '/artwork-file/' + encodeURIComponent(a.file);
+    // ?v= is the cache key, not a route parameter: the response is cached
+    // forever, so a replaced image needs a different URL to be seen at all.
+    img.src = '/artwork-file/' + encodeURIComponent(a.file) +
+              (a.mtime ? '?v=' + Math.floor(a.mtime) : '');
     img.loading = 'lazy';      // full-resolution art; only fetch what is seen
     img.decoding = 'async';
     img.alt = '';
@@ -515,14 +533,21 @@ async function fixArtwork(a) {
     payload.artist = text.split(' - ')[0].trim();
     payload.album_name = text.split(' - ').slice(1).join(' - ').trim();
   } else if (text) payload.album_name = text;
+  const msg = document.getElementById('artmsg');
+  // The override is applied on the spot, which means a download: say so, or
+  // the page looks frozen for the second or two that takes.
+  msg.textContent = 'Fetching\u2026';
   const r = await fetch('/api/artwork/override',
     {method: 'PUT', headers: {'Content-Type': 'application/json'},
      body: JSON.stringify(payload)});
-  if (r.ok) {
-    document.getElementById('artmsg').textContent =
-      'Saved. Collect again to pick it up.';
-    loadArtwork();
-  }
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { msg.textContent = body.error || 'Could not save that.'; return; }
+  msg.textContent = body.error ? body.error
+                  : body.collected ? 'Updated.' : 'Saved.';
+  // Redraw from the manifest rather than from the pasted URL: the tile has to
+  // show what will print, and loadArtwork picks up the new mtime that busts
+  // the cached copy of the old image.
+  loadArtwork();
 }
 
 async function makeSheets() {

@@ -136,3 +136,68 @@ def test_save_leaves_no_temp_file_behind(tmp_path):
     store = CardStore(path)
     store.save({"04a2b3c4": Card(uid="04a2b3c4", name="X", path="A/B")})
     assert [p.name for p in tmp_path.iterdir()] == ["cards.yaml"]
+
+
+# --- duplicate detection ---------------------------------------------------
+#
+# Two cards on one album is always a mistake here: every album gets exactly one
+# card. With ~130 registered it is invisible until two cards turn out to play
+# the same record, so the admin page flags it.
+
+
+def _card(uid, path, name=None):
+    from nfc_jukebox.cards import Card
+    return Card(uid=uid, name=name or path.split("/")[-1], path=path)
+
+
+def _store(*cards):
+    return {c.uid: c for c in cards}
+
+
+def test_no_cards_have_no_duplicates():
+    from nfc_jukebox.cards import duplicate_paths
+    assert duplicate_paths({}) == {}
+
+
+def test_distinct_albums_are_not_duplicates():
+    from nfc_jukebox.cards import duplicate_paths
+    cards = _store(_card("aa", "Pavement/Wowee Zowee"),
+                   _card("bb", "Mogwai/Young Team"))
+    assert duplicate_paths(cards) == {}
+
+
+def test_two_cards_on_one_album_are_reported_with_both_uids():
+    from nfc_jukebox.cards import duplicate_paths
+    cards = _store(_card("bb", "Pavement/Wowee Zowee"),
+                   _card("aa", "Pavement/Wowee Zowee"),
+                   _card("cc", "Mogwai/Young Team"))
+    # UIDs sorted, so the report is stable between calls.
+    assert duplicate_paths(cards) == {"Pavement/Wowee Zowee": ["aa", "bb"]}
+
+
+def test_three_cards_on_one_album_are_all_reported():
+    from nfc_jukebox.cards import duplicate_paths
+    cards = _store(_card("aa", "Pavement/Wowee Zowee"),
+                   _card("bb", "Pavement/Wowee Zowee"),
+                   _card("cc", "Pavement/Wowee Zowee"))
+    assert duplicate_paths(cards) == {"Pavement/Wowee Zowee": ["aa", "bb", "cc"]}
+
+
+def test_two_separate_pairs_are_both_reported():
+    from nfc_jukebox.cards import duplicate_paths
+    cards = _store(_card("aa", "Pavement/Wowee Zowee"),
+                   _card("bb", "Pavement/Wowee Zowee"),
+                   _card("cc", "Mogwai/Young Team"),
+                   _card("dd", "Mogwai/Young Team"))
+    assert duplicate_paths(cards) == {
+        "Pavement/Wowee Zowee": ["aa", "bb"],
+        "Mogwai/Young Team": ["cc", "dd"],
+    }
+
+
+def test_the_album_path_is_the_identity_not_the_label():
+    """Two cards labelled differently still point at one record."""
+    from nfc_jukebox.cards import duplicate_paths
+    cards = _store(_card("aa", "Pavement/Wowee Zowee", name="Wowee Zowee"),
+                   _card("bb", "Pavement/Wowee Zowee", name="for the car"))
+    assert duplicate_paths(cards) == {"Pavement/Wowee Zowee": ["aa", "bb"]}
