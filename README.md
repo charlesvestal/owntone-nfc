@@ -36,11 +36,17 @@ and drives OwnTone through its JSON REST API.
 | `cards.py` | UID → album mapping, persisted as YAML. |
 | `outputs.py` | Speaker-selection snapshot, so the choice survives a release cycle and a reboot. |
 | `controller.py` | The state machine. The only file with interesting logic, and where the tests live. |
-| `web.py` | Card registration. Deliberately tiny. |
+| `web.py` | Card registration, and the admin page. Deliberately tiny. |
+| `cardart/` | Finds cover art for albums still awaiting a card and lays it out as print-ready A4 sheets. Off the playback path entirely. |
 
 Card mappings store **library-root-relative paths**, never absolute paths and
 never OwnTone's numeric IDs — so a rebuild onto a new SD card doesn't cost you
 a single re-registration.
+
+Every album is meant to have exactly one card. Nothing in the format enforces
+it, so the admin page flags any album holding more than one — with a hundred-odd
+cards registered, a duplicate is otherwise invisible until two of them turn out
+to play the same record.
 
 ## Hardware
 
@@ -90,8 +96,16 @@ reliable card, not the first one to hand.
 
 ### If it goes in an enclosure
 
-Test networking in its final position before assembling everything. A Pi's
-internal antenna has little margin.
+Test networking in its final position before assembling everything, and **put
+it on 2.4 GHz**. A Pi's internal antenna has little margin, and 5 GHz has
+repeatedly proved to be the wrong side of it: at about -69 dBm this board
+associates, completes the handshake, reports itself connected — and then never
+completes DHCP, so the box is alive and believes it is fine while being
+completely unreachable. The same spot measures roughly 11 dB better on 2.4.
+
+The failure is binary rather than gradual, and it does not announce itself.
+[`docs/runbook.md`](docs/runbook.md) has the measurements and the three
+plausible explanations that turned out to be wrong.
 
 ## Getting started
 
@@ -105,6 +119,11 @@ sudo bash /home/pi/owntone-nfc/deploy/provision.sh
 Copy albums to `/srv/music/<Artist>/<Album>/` (Samba share at
 `smb://jukebox.local`), then open **http://jukebox.local:8080**, tap a card,
 pick an album, save.
+
+The same page collects cover art for albums that have no card yet, so you can
+print a sheet of them. A search that picks the wrong cover can be corrected by
+pinning a specific image URL; those corrections are hand-made judgements and
+`backup.sh` keeps them alongside the card registry.
 
 Pick your speakers in OwnTone at **http://jukebox.local:3689**. The jukebox
 remembers them.
