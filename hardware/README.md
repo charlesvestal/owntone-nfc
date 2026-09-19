@@ -1,0 +1,69 @@
+# Stand
+
+A slanted face that holds the card like a record on a shelf, with the Pi
+mounted directly behind it and **the back left open**.
+
+![elevations](stand-elevations.png)
+
+The open back is the whole idea. The Pi's ports face into it, so cables plug
+straight into the board — no panel cutouts to get wrong, no internal extension
+cables, and the airflow comes free. From the front you see a sleeve on a
+stand; everything else is behind it.
+
+The 15° lean means gravity holds the card against the face. The current box
+has it vertical, so a strip of felt is doing all the work.
+
+## Print the coupon first
+
+**`face_t` is the one dimension that can quietly ruin this.** Too thick and
+the reader stops seeing 4-byte cards — and it fails as intermittent flapping,
+not as an honest "no read", which is much harder to diagnose once it's
+assembled.
+
+```sh
+openscad -o coupon.stl -D 'part="coupon"' stand.scad
+```
+
+Six pads, 1.0–4.0 mm. Print it, then run `spikes/presence_check.py` with your
+**worst** card (a 4-byte Mifare-style one — 78 of the 132 are that type) held
+against each pad. Watch the **presence cycle count**, not whether it reads at
+all: a marginal thickness reads fine held still and falls apart when a card is
+set down.
+
+Set `window_t` to the largest thickness that stays rock solid, then print the
+stand.
+
+## Then the stand
+
+```sh
+openscad -o stand.stl stand.scad
+```
+
+Defaults give a 112 × 110 mm face, 62 mm deep, for a 95 mm card. Everything is
+parametric — card size, lean, lip, panel thickness, Pi hole spacing, antenna
+window — at the top of `stand.scad`.
+
+**Set `ant_dx` / `ant_dy` from your own HAT.** That's where the PN532's coil
+sits relative to the centre of the Pi board, and it positions the thinned
+window. The default assumes the antenna is off to one side, as on this HAT.
+
+The panel is thinned **from behind**, so the outside stays flat and rigid
+while the reader only has `window_t` of plastic to see through.
+
+## Printing notes
+
+- **Orientation**: base down, as modelled. The face is 15° off vertical, which
+  is well within overhang tolerance, and the lip is chamfered underneath so it
+  needs no support.
+- **No metal near the face.** Screws, heat-set inserts and magnets all kill NFC
+  coupling. The standoffs take self-tapping M2.5 straight into plastic.
+- **Keep the Pi's USB-C/HDMI corner clear** of anything dense — that's the Wi-Fi
+  antenna, and it has little margin to spare.
+- **Felt**: `felt_w` / `felt_t` cut a recess in the lip so the strip finishes
+  flush instead of sitting proud.
+
+## Rendering on Apple Silicon
+
+The Homebrew and 2021.01 OpenSCAD builds are Intel-only. Either install
+Rosetta (`softwareupdate --install-rosetta`) or fetch an arm64 development
+snapshot from openscad.org.
