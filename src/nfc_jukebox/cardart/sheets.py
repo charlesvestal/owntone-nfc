@@ -11,11 +11,10 @@ at all: the picture is scaled to cover the square and the square is painted.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import struct
-import subprocess
-import tempfile
 
 from .artlib import MATCH_FLOOR
 
@@ -55,23 +54,35 @@ def jpeg_info(data: bytes):
 def as_jpeg(path: str) -> bytes:
     """JPEG bytes for an image file, converting only if it is not already one.
 
-    A handful of sources serve PNG. Rather than carry an image library for the
-    sake of one or two files, hand those to sips, which ships with macOS.
+    JPEGs are returned byte-for-byte -- the point of this module is that
+    nothing is resampled on the way into the PDF -- so this only does work for
+    the handful of sources that serve PNG.
+
+    That conversion was a call to `sips` until 2026-09-19. sips ships with
+    macOS and exists nowhere else, so on the Pi it raised FileNotFoundError and
+    the sheets endpoint returned a 500. Pillow costs a dependency and works on
+    both.
     """
     with open(path, "rb") as handle:
         data = handle.read()
     if data[:2] == b"\xff\xd8":
         return data
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-        out = tmp.name
-    try:
-        subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions",
-                        "95", path, "--out", out],
-                       check=True, capture_output=True)
-        with open(out, "rb") as handle:
-            return handle.read()
-    finally:
-        os.path.exists(out) and os.unlink(out)
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    with Image.open(io.BytesIO(data)) as source:
+        image = source
+        if source.mode in ("RGBA", "LA", "P"):
+            # JPEG has no alpha channel. Compose onto white, or every
+            # transparent region prints black.
+            rgba = source.convert("RGBA")
+            image = Image.new("RGB", rgba.size, (255, 255, 255))
+            image.paste(rgba, mask=rgba.split()[-1])
+        elif source.mode != "RGB":
+            image = source.convert("RGB")
+        image.save(buffer, format="JPEG", quality=95)
+    return buffer.getvalue()
 
 
 class Pdf:
