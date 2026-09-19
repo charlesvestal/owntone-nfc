@@ -53,6 +53,17 @@ chamfer    = 1.2;     // on every visible edge
 taper      = 9;       // how far the sides rake in, per side, bottom to top
 lip_depth  = 9;       // how far the lip projects from the face
 lip_face   = 3.5;     // height of the lip's own front face, above its chamfer
+// The lip ends exactly where the body's corner arc begins, and curves back
+// with the same radius to meet it. The body's front is flat across
+// +/-(width/2 - corner_r); beyond that it is turning. Run the lip any wider
+// and it projects past a face that is already curving away, which is what left
+// a tab at the corner. Any narrower and it stops short for no reason.
+// The 0.4 is not decoration: ending exactly on the tangent point means the
+// lip's end arc and the body's corner arc touch at a single line, and CGAL
+// turns that into non-manifold edges. A hair short of it, they overlap
+// properly. Invisible in plastic, the difference between a valid mesh and one
+// a slicer refuses.
+lip_inset  = corner_r + 0.4;
 felt_inset = 1.5;     // felt recess held back from the front edge
 felt_w     = 6;       // recess for the felt strip, 0 to leave the lip flat
 felt_t     = 1.2;
@@ -240,13 +251,25 @@ module body() {
         // and through the corner between them.
         union() {
             // up the chamfer, then the lip's front face
-            hull() { translate([0, 0, 0]) plan_slab(width_at(0), P_base);
+            // The lip runs across the flat of the face and then curves back
+            // into the body's corner, sharing its radius, so the two meet
+            // tangentially instead of colliding.
+            hull() { translate([0, 0, 0])
+                         plan_slab(width_at(0) - 2*lip_inset, P_base);
                      translate([0, 0, P_lip_lo[1]])
-                         plan_slab(width_at(P_lip_lo[1]), P_lip_lo[0]); }
+                         plan_slab(width_at(P_lip_lo[1]) - 2*lip_inset,
+                                   P_lip_lo[0]); }
             hull() { translate([0, 0, P_lip_lo[1]])
-                         plan_slab(width_at(P_lip_lo[1]), P_lip_lo[0]);
+                         plan_slab(width_at(P_lip_lo[1]) - 2*lip_inset,
+                                   P_lip_lo[0]);
                      translate([0, 0, P_lip_hi[1]])
-                         plan_slab(width_at(P_lip_hi[1]), P_lip_hi[0]); }
+                         plan_slab(width_at(P_lip_hi[1]) - 2*lip_inset,
+                                   P_lip_hi[0]); }
+            // the body proper, from the base up
+            hull() { translate([0, 0, 0]) plan_slab(width_at(0), face_t);
+                     translate([0, 0, P_lip_hi[1]])
+                         plan_slab(width_at(P_lip_hi[1]),
+                                   P_lip_hi[1] * tan(lean)); }
             // and on up the leaning face
             hull() { translate([0, 0, P_lip_hi[1]])
                          plan_slab(width_at(P_lip_hi[1]),
