@@ -78,12 +78,33 @@ first-reply-wins is how the wrong album gets printed.
 Amazon isn't usable: unauthenticated requests are refused, and the Product
 Advertising API needs an Associates account with qualifying sales.
 
+## Printing
+
+```sh
+python3 make_sheets.py --dir ~/Documents/_Personal/music/cardart
+```
+
+Writes `covers-to-print.pdf` next to the images: **95mm squares, six to an A4
+page**, two columns of three, evenly spaced. The geometry was measured from
+the Affinity Publisher export that produced the existing deck, so new cards
+come out the same size as the ones already in the box — verified against it to
+within 0.3mm.
+
+JPEGs are embedded as-is rather than re-encoded, so nothing is resampled on
+the way through. Artwork that isn't square is centre-cropped with a clipping
+path: the picture is scaled to cover the square and the square is painted.
+Centre-cropping is the right call for sleeves, where the title and label sit
+in the middle.
+
+Questionable matches and anything marked skipped are left out by default;
+`--include-suspect` overrides that, and `--min-px` drops low-resolution art.
+
 ## Resolution
 
-Cards print at **4.5 inches square**. The existing deck runs 1000–1400px
-(222–311 dpi at that size), median 1200, so **1000px is the floor** — measured
-from what has actually looked fine printed, rather than a textbook 300 dpi.
-Change it with `--min-px`.
+Cards print at **95mm square**, so 1000px is 267 dpi and the common 1400px is
+374 dpi. The floor of **1000px** comes from the existing deck, which runs
+1000–1400px with a median of 1200 — measured from what has actually looked
+fine printed, rather than a textbook number. Change it with `--min-px`.
 
 ## Files
 
@@ -92,4 +113,5 @@ Change it with `--min-px`.
 | `refresh.sh` | the one command — fetch, copy back, review |
 | `fetch_art.py` | collects and ranks candidates |
 | `make_review.py` | builds `review.html` |
+| `make_sheets.py` | builds the print-ready A4 PDF |
 | `artlib.py` | image headers, search terms, match scoring (tested in `tests/test_cardart.py`) |
