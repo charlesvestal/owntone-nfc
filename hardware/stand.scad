@@ -66,7 +66,23 @@ base_t     = 4;
 /* [Raspberry Pi 4] */
 pi_w = 85; pi_h = 56;
 pi_hole_dx = 58; pi_hole_dy = 49;
-standoff_h = 5; standoff_d = 6.4; screw_d = 2.3;
+standoff_d = 6.4; screw_d = 2.3;
+
+// You screw the HAT to the face, not the Pi. They share the 85 x 56 footprint
+// and the same hole pattern, and the coil has to be the thing nearest the
+// card: with the Pi against the panel instead, the HAT ends up behind it on
+// the GPIO header, ~20mm further away and with the Pi's ground planes in the
+// way. The Pi then hangs off the back of the HAT on that header.
+//
+// The height is set by the HAT's own tall top-side parts -- the 1x17 breakout
+// and the 2x3 jumper block stand 7.6mm proud of the board (measured from
+// Waveshare's STEP model) -- and they face the panel in this orientation.
+//
+// Note what that means: at 11mm the coil sits ~14mm behind the card, so the
+// STANDOFF is the read gap and the thinned window buys nothing. Getting the
+// coil close enough to matter needs a relief opening in the panel for those
+// headers, which the card would hide. Measure first with the gauge below.
+standoff_h = 11;
 
 /* [PN532 HAT antenna] */
 // Measured from Waveshare's own dimension drawing for the PN532 NFC HAT
@@ -324,12 +340,27 @@ module stand() {
 }
 
 module coupon() {
-    steps = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0];
-    for (i = [0 : len(steps) - 1])
-        translate([i * 34, 0, 0]) {
-            cube([32, 32, steps[i]]);
-            translate([2.5, 3, steps[i]])
-                linear_extrude(0.6) text(str(steps[i]), size = 7);
+    // A distance gauge, not a thickness coupon.
+    //
+    // What decides whether a card reads is how far the coil is from it, and in
+    // this stand that distance is set by the standoffs, not by the panel. So
+    // this prints pads that hold a card at a known gap: sit the HAT face down
+    // on a pad, put your worst card on top, and see what happens.
+    //
+    // Use a 4-byte Mifare-style card -- 78 of the 132 are that type, and they
+    // are the ones that fail as intermittent flapping rather than an honest
+    // no-read. Watch the presence cycle count in spikes/presence_check.py,
+    // not simply whether it reads.
+    gaps = [6, 8, 10, 12, 14, 16];
+    for (i = [0 : len(gaps) - 1])
+        translate([i * 42, 0, 0]) {
+            difference() {
+                cube([40, 40, gaps[i]]);
+                // hollow, so it prints quickly and uses little material
+                translate([3, 3, -1]) cube([34, 34, gaps[i] - 2]);
+            }
+            translate([4, 14, gaps[i]])
+                linear_extrude(0.6) text(str(gaps[i], "mm"), size = 8);
         }
 }
 

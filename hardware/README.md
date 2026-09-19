@@ -15,25 +15,47 @@ stand; everything else is behind it.
 The 15° lean means gravity holds the card against the face. The current box
 has it vertical, so a strip of felt is doing all the work.
 
-## Print the coupon first
+## You screw in the HAT, not the Pi
 
-**`face_t` is the one dimension that can quietly ruin this.** Too thick and
-the reader stops seeing 4-byte cards — and it fails as intermittent flapping,
-not as an honest "no read", which is much harder to diagnose once it's
-assembled.
+They share the 85 x 56 mm footprint and the same hole pattern, so either will
+bolt to the face — but only one is right. The coil has to be the thing nearest
+the card. Mount the **Pi** to the panel and the HAT ends up behind it on the
+GPIO header, roughly 20 mm further from the card with the Pi's ground planes in
+between; it will read badly or not at all.
+
+So: **HAT bolted to the face, coil toward the card, Pi hanging off the back of
+it** on the GPIO header.
+
+## Measure the gap first
+
+The HAT's tall top-side parts — the 1x17 breakout and the 2x3 jumper block —
+stand **7.6 mm proud** of the board (measured from Waveshare's STEP model), and
+in this orientation they face the panel. That forces ~11 mm standoffs, which
+puts the coil about **14 mm** behind the card.
+
+**That gap, not the panel thickness, is what decides whether a card reads.** At
+11 mm standoffs the thinned window over the coil buys nothing at all — it only
+matters if the HAT is nearly touching the panel.
+
+So print the gauge and find out what your cards actually tolerate:
 
 ```sh
-openscad -o coupon.stl -D 'part="coupon"' stand.scad
+openscad -o gauge.stl -D 'part="coupon"' stand.scad
 ```
 
-Six pads, 1.0–4.0 mm. Print it, then run `spikes/presence_check.py` with your
-**worst** card (a 4-byte Mifare-style one — 78 of the 132 are that type) held
-against each pad. Watch the **presence cycle count**, not whether it reads at
-all: a marginal thickness reads fine held still and falls apart when a card is
-set down.
+Six hollow pads, 6–16 mm. Sit the HAT face down on a pad, put your **worst**
+card on top — a 4-byte Mifare-style one, 78 of the 132 are that type — and run
+`spikes/presence_check.py`. Watch the **presence cycle count**, not simply
+whether it reads: a marginal gap reads fine held still and falls apart when a
+card is set down.
 
-Set `window_t` to the largest thickness that stays rock solid, then print the
-stand.
+Then pick:
+
+- **If 14 mm reads solidly**, keep `standoff_h = 11` and set `window_t = face_t`
+  (the window is pointless at that distance).
+- **If it doesn't**, the coil needs to come closer, which means a relief opening
+  in the panel for those tall headers — hidden behind the card — and short
+  standoffs. That gets the coil to about 7 mm. Ask and I'll add it.
 
 ## Then the stand
 
@@ -41,7 +63,7 @@ stand.
 openscad -o stand.stl stand.scad
 ```
 
-Defaults give a 112 × 110 mm face, 62 mm deep, for a 95 mm card. Everything is
+Defaults give a ~120 × 123 mm face, 66 mm deep, for a 95 mm card. Everything is
 parametric — card size, lean, lip, panel thickness, Pi hole spacing, antenna
 window — at the top of `stand.scad`.
 
