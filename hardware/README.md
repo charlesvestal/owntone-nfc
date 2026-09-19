@@ -73,10 +73,15 @@ not a short 65 mm HAT — with a 37.4 x 37.8 mm coil panel centred 17.0 mm along
 the long axis and 2.3 mm across from the board centre, on the far side from the
 GPIO header.
 
-So the only thing to measure is where the tag sits on your cards. Set `tag_dx` /
-`tag_dy` — its centre relative to the card's centre, seen from the **front**,
-+x right and +y up. Stickers applied with the tag at the lower right *as seen
-from the back* land at the lower left from the front, so both are negative.
+So the only thing to measure is where the tag sits on your cards, and that is
+done: **30 mm in from the left edge and 65 mm down from the top, measured on the
+back.** Viewing from the front mirrors left to right but not top to bottom, so
+in the model's frame that is `tag_dx = 17.5`, `tag_dy = -17.5` — the lower right
+quadrant from the front, however it looks from behind.
+
+With the HAT unflipped that lands the Pi almost exactly centred (0.5 mm off),
+needing only a 76 mm panel against the 120 mm the card already demands. Flipped
+it would want a 144 mm one, so `hat_flipped = false`.
 
 The model then works out where the Pi has to go to put the coil on the tag, and
 `hat_flipped` mirrors the offset by turning the HAT end-for-end — which is

@@ -102,15 +102,18 @@ ant_h      = 42;
 
 // Turning the HAT end-for-end in the stand mirrors that offset, which is
 // usually what decides whether the coil can reach the tag at all.
-hat_flipped = true;
+hat_flipped = false;
 
 /* [Where the tag sits on the card] */
 // Centre of the tag relative to the centre of the card, seen from the FRONT,
-// +x right and +y up. Stickers applied with the tag at the lower right *as
-// seen from the back* land at the lower LEFT from the front, so both are
-// negative. This is the one thing worth measuring off your own cards.
-tag_dx = -24;
-tag_dy = -24;
+// +x right and +y up.
+//
+// Measured on these cards from the BACK: 30mm in from the left edge, 65mm down
+// from the top. Viewing from the front mirrors left to right but not top to
+// bottom, so that is 65mm from the left and 65mm from the top -- the lower
+// RIGHT quadrant from the front, however it looks from behind.
+tag_dx = 17.5;
+tag_dy = -17.5;
 
 $fn = 64;
 
