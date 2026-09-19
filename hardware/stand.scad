@@ -71,8 +71,14 @@ lip_return = 15;      // radius the lip's ends sweep back on, dying into the
                       // sweep reads as one S from the body's curve into the
                       // lip's.
 concave_r  = 0.9;     // softens the crease where the lip's top meets the face
+lip_fillet = 5;       // cove where the lip's ends run into the face
 felt_inset = 1.5;     // felt recess held back from the front edge
-felt_w     = 6;       // recess for the felt strip, 0 to leave the lip flat
+// The felt recess runs from felt_inset all the way BACK INTO the panel,
+// leaving no wall behind it. There used to be 1.5mm of shelf between the
+// recess and the face, and it was not only a fussy little ridge to look at --
+// the card's bottom edge would have had to sit on top of it, holding the card
+// off the face it is supposed to lean against.
+felt_w     = lip_depth - felt_inset + 0.6;
 felt_t     = 1.2;
 
 /* [Shell] */
@@ -237,12 +243,36 @@ module side_profile() {
 
 // A thin rounded slab spanning y_front..depth at width w, used to loft the
 // plan that carries the corner radius.
-module plan_slab(w, y_front, r = corner_r) {
+// One horizontal slice of the plan: the body's outline, the lip's outline
+// where there is one, and a COVE filleting the two together.
+//
+// The fillet is the point. Unioned raw, the lip's returning end crosses the
+// face at a steep angle and leaves a sharp valley -- a crease running down
+// into the panel. offset(r=-f) offset(r=+f) is a morphological closing, which
+// rounds concave corners, so the lip curves out into the face instead of
+// cutting into it.
+module plan_at(z, with_lip = true) {
     linear_extrude(0.01)
-        translate([0, (y_front + depth) / 2])
-            offset(r = r) offset(r = -r)
-                square([w, depth - y_front], center = true);
+        offset(r = -lip_fillet) offset(r = lip_fillet)
+            union() {
+                _rr(width_at(z), face_front(z), corner_r);
+                if (with_lip)
+                    _rr(width_at(z) - 2*lip_inset, lip_front(z), lip_return);
+            }
 }
+
+module _rr(w, y_front, r) {
+    translate([0, (y_front + depth) / 2])
+        offset(r = r) offset(r = -r)
+            square([w, depth - y_front], center = true);
+}
+
+// Where the body's face and the lip's front sit at a given height.
+function face_front(z) = z * tan(lean);
+function lip_front(z) =
+    z <= P_lip_lo[1] ? P_base + (P_lip_lo[0] - P_base) * z / P_lip_lo[1]
+                     : P_lip_lo[0] + (P_lip_hi[0] - P_lip_lo[0])
+                       * (z - P_lip_lo[1]) / (P_lip_hi[1] - P_lip_lo[1]);
 
 function width_at(z) = face_w - 2 * taper * z / top_z;
 
@@ -252,45 +282,22 @@ module body() {
             rotate([90, 0, 90])
                 linear_extrude(face_w * 2) side_profile();
 
-        // The plan that rounds the vertical edges, LOFTED so its corner arcs
-        // follow the front of the object instead of sitting at one fixed
-        // depth.
+        // The plan that carries the rounding, LOFTED so its arcs follow the
+        // front of the object rather than sitting at one fixed depth.
         //
         // A single rounded rectangle only rounds its own four corners. The
         // face leans back, so those arcs stopped matching it within a few
         // millimetres of the base and the whole front was left with square
-        // arrises; the lip, further forward again, met them as flat slabs
-        // running into a curve. Lofting between slabs whose fronts track the
-        // silhouette keeps one continuous radius up the face, around the lip
-        // and through the corner between them.
+        // arrises.
         union() {
-            // up the chamfer, then the lip's front face
-            // The lip runs across the flat of the face and then curves back
-            // into the body's corner, sharing its radius, so the two meet
-            // tangentially instead of colliding.
-            hull() { translate([0, 0, 0])
-                         plan_slab(width_at(0) - 2*lip_inset, P_base,
-                                   lip_return);
-                     translate([0, 0, P_lip_lo[1]])
-                         plan_slab(width_at(P_lip_lo[1]) - 2*lip_inset,
-                                   P_lip_lo[0], lip_return); }
-            hull() { translate([0, 0, P_lip_lo[1]])
-                         plan_slab(width_at(P_lip_lo[1]) - 2*lip_inset,
-                                   P_lip_lo[0], lip_return);
-                     translate([0, 0, P_lip_hi[1]])
-                         plan_slab(width_at(P_lip_hi[1]) - 2*lip_inset,
-                                   P_lip_hi[0], lip_return); }
-            // the body proper, from the base up
-            hull() { translate([0, 0, 0]) plan_slab(width_at(0), face_t);
-                     translate([0, 0, P_lip_hi[1]])
-                         plan_slab(width_at(P_lip_hi[1]),
-                                   P_lip_hi[1] * tan(lean)); }
-            // and on up the leaning face
+            hull() { translate([0, 0, 0]) plan_at(0);
+                     translate([0, 0, P_lip_lo[1]]) plan_at(P_lip_lo[1]); }
+            hull() { translate([0, 0, P_lip_lo[1]]) plan_at(P_lip_lo[1]);
+                     translate([0, 0, P_lip_hi[1]]) plan_at(P_lip_hi[1]); }
             hull() { translate([0, 0, P_lip_hi[1]])
-                         plan_slab(width_at(P_lip_hi[1]),
-                                   P_lip_hi[1] * tan(lean));
+                         plan_at(P_lip_hi[1], with_lip = false);
                      translate([0, 0, top_z])
-                         plan_slab(width_at(top_z), top_y); }
+                         plan_at(top_z, with_lip = false); }
         }
     }
 }
