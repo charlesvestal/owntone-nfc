@@ -263,24 +263,26 @@ module felt_recess() {
 }
 
 module antenna_window() {
-    // Thinned from BEHIND: the outside stays flat and rigid, the reader only
-    // sees window_t of plastic.
-    // Clipped to stay above the lip. The window leaves window_t of material
-    // measured from the FRONT, and the card rebate removes rebate_d from that
-    // same front face -- so anywhere the two overlap there is nothing left at
-    // all, whatever the panel thickness, and the face opens into a slot. The
-    // coil can lose its bottom few millimetres harmlessly; a hole in the front
-    // of the stand it cannot.
-    intersection() {
-        rotate([-lean, 0, 0])
-            translate([ant_dx - ant_w/2, window_t, card_mid + ant_dy - ant_h/2])
-                // Runs past the panel's inner surface on purpose: ending flush
-                // with the cavity leaves coincident faces, which render as
-                // speckle and can confuse a slicer.
-                cube([ant_w, face_t - window_t + 4, ant_h]);
-        rotate([-lean, 0, 0])
-            translate([-face_w, -face_t, lip_h + 1.5])
-                cube([face_w * 2, face_t * 6, face_h * 2]);
+    // Nothing at all when window_t >= face_t, which is the default.
+    //
+    // The cutter runs past the panel's inner surface on purpose (coincident
+    // faces render as speckle and confuse slicers), so with no thinning to do
+    // it was still carving 4mm out of the cavity -- and taking bites out of
+    // the standoff cones, which is what the gaps in them were.
+    if (window_t < face_t) {
+        // Clipped to stay above the lip. The window leaves window_t of
+        // material measured from the FRONT, and the card lip sits against that
+        // same front face -- so anywhere the two overlap there is nothing left
+        // at all, whatever the panel thickness.
+        intersection() {
+            rotate([-lean, 0, 0])
+                translate([ant_dx - ant_w/2, window_t,
+                           card_mid + ant_dy - ant_h/2])
+                    cube([ant_w, face_t - window_t + 4, ant_h]);
+            rotate([-lean, 0, 0])
+                translate([-face_w, -face_t, lip_h + 1.5])
+                    cube([face_w * 2, face_t * 6, face_h * 2]);
+        }
     }
 }
 
