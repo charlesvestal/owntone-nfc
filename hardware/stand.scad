@@ -173,25 +173,46 @@ module rounded_rect(w, d, r) {
 // offset(+r) offset(-r) is an opening, which rounds the convex corners --
 // the ones you can actually see and run a thumb along.
 module side_profile() {
-    r = 2.5;
+    // Rounds the convex corners of this outline -- including the lip's front
+    // edge, which is only lip_face tall. At 2.5 the radius swallowed that face
+    // whole and the lip came out as a fat bullnose; 1.2 leaves it a legible
+    // face with a softened edge.
+    r = 1.2;
     // The front face must run at exactly `lean`, because the cavity, the card
-    // slot and the standoffs are all built in a frame rotated by that angle.
-    // An earlier version fudged the top point by +6mm to get a flat top,
-    // which quietly made the real face 16.7 degrees -- the cavity was then no
-    // longer parallel to it and sliced the whole panel away.
-    // The outer face passes through the origin, so in the face's own frame the
-    // panel runs from y=0 (outside) to y=face_t (inside) and everything built
-    // in that frame -- cavity, window, standoffs -- measures from the surface
-    // you can actually touch. Offsetting this edge instead put the *outer*
-    // surface at y=face_t, exactly where the cavity began, and the hollowing
-    // then removed the entire panel.
+    // lip and the standoffs are all built in a frame rotated by that angle.
+    //
+    // The lip is part of THIS profile rather than a solid unioned on
+    // afterwards. Added separately it was clipped to its own plan, so across
+    // the body's corner radius the body curved inward while the lip stayed
+    // full width -- the lip overhung the curve and ended in a square edge,
+    // which is the "curve into a hard edge" you can see on the corner. In the
+    // profile there is only one outline, so the rounding is continuous.
+    top_z = face_h * cos(lean);
     top_y = face_h * sin(lean);
+
+    // The lip's corners, converted from the face's frame (y into the panel,
+    // z up the slope) into this profile's world y/z.
+    function fy(y, z) = y * cos(lean) + z * sin(lean);
+    function fz(y, z) = -y * sin(lean) + z * cos(lean);
+    back  = face_t - 0.8;                     // ends inside the panel
+    lip_front_low  = [fy(-lip_depth, lip_h - lip_face),
+                      fz(-lip_depth, lip_h - lip_face)];
+    lip_front_high = [fy(-lip_depth, lip_h), fz(-lip_depth, lip_h)];
+    lip_meets_face = [fy(0, lip_h), fz(0, lip_h)];
+    // Where the chamfer under the lip crosses the base plane.
+    chamfer_end = [fy(back, 0), fz(back, 0)];
+    t = lip_front_low[1] / (lip_front_low[1] - chamfer_end[1]);
+    chamfer_at_base = lip_front_low[0] + t * (chamfer_end[0] - lip_front_low[0]);
+
     offset(r = r) offset(r = -r)
         polygon([
-            [0, 0],
-            [depth, 0],
-            [depth, top_z * back_h],         // sides carry back to here
+            [chamfer_at_base, 0],
+            lip_front_low,
+            lip_front_high,
+            lip_meets_face,
             [top_y, top_z],
+            [depth, top_z * back_h],
+            [depth, 0],
         ]);
 }
 
@@ -206,9 +227,11 @@ module body() {
         // uses, and for the same reason: straight sides read as a box, angled
         // ones as a made object. Depth is left alone (scale [sx, 1]) so the
         // footprint stays stable and the back stays square to the world.
-        translate([0, depth/2, 0])
+        // Reaching forward far enough to cover the lip, so the lip and the
+        // face share one rounded outline instead of two that disagree.
+        translate([0, (depth - lip_depth - 2)/2, 0])
             linear_extrude(top_z, scale = [(face_w - 2*taper) / face_w, 1])
-                rounded_rect(face_w, depth, corner_r);
+                rounded_rect(face_w, depth + lip_depth + 2, corner_r);
     }
 }
 
@@ -217,48 +240,6 @@ module body() {
 // (side_profile is extruded along X), so that frame is a rotation about the
 // X axis -- rotating about Y instead tilts everything sideways and leaves the
 // standoffs hanging in front of the panel.
-module card_lip() {
-    // A ledge the card stands on, full width, with the felt recessed into it
-    // so the strip finishes flush rather than sitting proud.
-    //
-    // The underside is chamfered back to the face. A ledge projecting from a
-    // panel that already leans back is a full overhang, and would otherwise
-    // need support exactly where the finish shows most.
-    intersection() {
-        rotate([-lean, 0, 0])
-            rotate([90, 0, 90])
-                linear_extrude(face_w * 2, center = true)
-                    // Ends INSIDE the panel, at neither of its two surfaces.
-                    //
-                    // Stopping at y=0 gives a zero-volume contact and the
-                    // union leaves the lip as a separate shell -- a floating
-                    // region, literally. Stopping at y=face_t instead puts its
-                    // back face exactly on the panel's inner surface, and two
-                    // unioned solids sharing a face outright is what produces
-                    // non-manifold edges. Somewhere between the two, it simply
-                    // overlaps.
-                    polygon([
-                        [face_t - 0.8, 0],
-                        [face_t - 0.8, lip_h],
-                        [-lip_depth, lip_h],
-                        [-lip_depth, lip_h - lip_face],
-                    ]);
-        // Clipped to the body's plan, so the lip ends flush with the raked
-        // sides and picks up the same corner radius instead of standing out
-        // past them as a slab.
-        //
-        // A hair narrower than the body on purpose. Clipped to exactly the
-        // same width, the lip's sides and the body's sides are coincident
-        // faces, and unioning two solids that share a face outright produces
-        // non-manifold edges -- which is what a slicer complains about. 20
-        // microns is a quarter of a layer line and half the nozzle's
-        // resolution: real to CGAL, invisible in plastic.
-        translate([0, (depth - lip_depth - 6)/2, 0])
-            linear_extrude(top_z, scale = [(face_w - 2*taper) / face_w, 1])
-                rounded_rect(face_w - 0.02, depth + lip_depth + 6, corner_r);
-    }
-}
-
 module felt_recess() {
     if (felt_w > 0)
         rotate([-lean, 0, 0])
@@ -378,7 +359,6 @@ module _stand_raw() {
                 body();
                 cavity();
             }
-            card_lip();
             pi_standoffs();
         }
         felt_recess();
