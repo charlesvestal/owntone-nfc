@@ -32,7 +32,35 @@ say "Wi-Fi: disable power save  <-- DO NOT SKIP"
 # nothing: rx stuck at 6 Mbit/s against tx 260, DHCP timing out, no traffic
 # passing. It looks exactly like a dead network, a bad router or a shielded
 # antenna, and it cost hours to find. With it off: rx 433 Mbit/s.
-for conn in $(nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="802-11-wireless"{print $1}'); do
+#
+# This loop only *modifies* connections that already exist - Wi-Fi itself is
+# expected to come from Raspberry Pi Imager. When the imager's Wi-Fi did not
+# take, the loop silently matched nothing and provisioning reported success on
+# a box with no way onto the network. That cost an evening. Fail loudly now.
+wifi_conns=$(nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="802-11-wireless"{print $1}')
+
+if [ -z "$wifi_conns" ]; then
+  cat >&2 <<'EOF'
+
+    !!  NO WI-FI CONNECTION IS CONFIGURED  !!
+
+    This box has no Wi-Fi profile, so it will be unreachable the moment it is
+    unplugged from Ethernet. Raspberry Pi Imager's Wi-Fi setup did not take,
+    or was skipped.
+
+    Configure it, then re-run this script:
+
+        sudo nmcli --ask dev wifi connect <SSID>
+
+    Prefer the 2.4 GHz SSID. This board's 5 GHz path fails at around -69 dBm
+    in the jukebox's normal position: it associates, completes the handshake,
+    and then never completes DHCP. See docs/runbook.md.
+
+EOF
+  exit 1
+fi
+
+for conn in $wifi_conns; do
   nmcli connection modify "$conn" 802-11-wireless.powersave 2 || true
   echo "    power save disabled on '$conn'"
 done

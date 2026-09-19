@@ -8,7 +8,7 @@ what you want when something is broken or you are rebuilding.
 
 | | |
 |---|---|
-| Host | `jukebox.local` (Wi-Fi, DHCP) |
+| Host | `jukebox.local` (Wi-Fi 2.4 GHz `tincanphoney24`, DHCP) |
 | Admin page | http://jukebox.local:8080 — card registration only |
 | OwnTone | http://jukebox.local:3689 — player, volume, speakers, library |
 | Music | `/srv/music/<Artist>/<Album>/` — Samba share `smb://jukebox.local` (guest) |
@@ -52,9 +52,12 @@ failing repeater, or a shielded antenna, and it is none of those.
 nmcli connection modify <wifi-connection> 802-11-wireless.powersave 2
 ```
 
-With it off: rx 433 Mbit/s, DHCP instant. `provision.sh` applies this to every
-Wi-Fi connection it finds. The setting lives only in NetworkManager on the SD
-card, so a rebuild without provision.sh will hit this again.
+With it off: rx 433 Mbit/s, DHCP instant. Transmit suffers too: 263 Mbit/s
+down to 24 with power save on. `provision.sh` applies this to every Wi-Fi
+connection it finds, and on Trixie the setting survives a reboot despite
+netplan generating the NetworkManager config. The setting lives only in
+NetworkManager on the SD card, so a rebuild without provision.sh will hit this
+again.
 
 Diagnosing this took hours, mostly because the fix was applied early and then
 buried under two other changes (a BSSID pin and a static IP) whose failure
@@ -85,85 +88,113 @@ new information.
 **macOS is not usable as a test receiver** — macOS 27 returns 403 to an
 unauthenticated `/info` probe even over loopback.
 
-## Wi-Fi: keep 5 GHz OFF the DFS channels
+## Wi-Fi: use the 2.4 GHz SSID, not 5 GHz
 
-**This is the single most important network setting, and it cost an entire
-evening to find.**
+**This board's 5 GHz path fails in the jukebox's normal position, and 2.4 GHz
+works. Configure `tincanphoney24`.** Everything below is the evidence, because
+two earlier outages were blamed on the wrong thing.
 
-The Speedport defaulted its 5 GHz band to **channels 100/104/108/112**, which
-are DFS - radar-protected. On a DFS channel a client is **not permitted to
-probe actively**; it must sit and passively wait to catch a beacon. At good
-signal that is invisible. At marginal signal it fails, and it fails in a
-thoroughly confusing way: the Pi associates, completes the 4-way handshake,
-reports "connected" - and then never completes DHCP. It ends up with an IPv6
-link-local address and nothing else, so the box is alive and believes it is
-fine, while being completely unreachable.
+Measured 2026-09-19, same board, same spot, minutes apart:
 
-Set the router's 5 GHz channel to a fixed **non-DFS** channel: 36, 40, 44 or
-48. Measured effect, same Pi, same enclosure, same room:
+| Band | SSID | Channel | Signal | DHCP | Rate |
+|---|---|---|---|---|---|
+| 5 GHz | `tincanphoney` | 36 (non-DFS) | -69 dBm | **never completes** | - |
+| 2.4 GHz | `tincanphoney24` | 11 | **-58 dBm** | instant | 130 Mbit/s |
 
-| 5 GHz channel | signal | rx rate | DHCP |
-|---|---|---|---|
-| 100 (DFS) | -69 dBm | 6 Mbit/s | never completes |
-| 36 (non-DFS) | -66 dBm | 325 Mbit/s | instant |
+Eleven dB, and the difference between working and not. 2.4 GHz penetrates; the
+box sits where it sits.
 
-Three dB of signal difference, and the difference between working and not.
+The 5 GHz failure is always the same and is thoroughly misleading: it
+associates, completes the 4-way handshake, logs *"Connected to wireless
+network"* - and then DHCP opens a transaction and gets nothing. The box is
+alive and believes it is fine, while being completely unreachable.
 
-**What this looked like while being diagnosed**, so nobody repeats it: it was
-blamed in turn on the NFC HAT shielding the antenna, on Wi-Fi power save, on
-the enclosure, on a dead 2.4 GHz radio, on the OS, and on the board - and two
-full rebuilds and a board swap happened before the router setting was
-examined. The giveaway, in hindsight, was that transmit stayed fast while
-receive collapsed to the 6 Mbit/s floor: a receive-path problem, which is
-exactly what passive-only scanning produces.
+### What this is NOT - three theories that were wrong
 
-**Check the router first.** It is one settings page and rules out more than any
-amount of work on the Pi.
+Each cost real time. Do not re-run them.
 
-## Wi-Fi: power save must stay off too
+**Not DFS.** The earlier outage was blamed on the router defaulting 5 GHz to
+channels 100/104/108/112, which are radar-protected, where a client may not
+probe actively. Plausible, and wrong: on 2026-09-19 the identical failure
+reproduced on **channel 36, a non-DFS channel**, with the router's 5 GHz band
+correctly pinned. DFS is not necessary to produce this.
 
-Separate from the above and also necessary. With `802-11-wireless.powersave`
-on, transmit collapsed from 263 Mbit/s to 24. `provision.sh` disables it on
-every Wi-Fi connection it finds; on Trixie the setting survives a reboot
-despite netplan generating the NetworkManager config.
+What actually correlates across every observation is the **5 GHz signal
+level**, with a cliff somewhere around -67 dBm: -66 dBm worked, -69 dBm failed,
+twice. The earlier "changing to channel 36 fixed it" result was almost
+certainly a few dB gained from moving the box, not the channel.
 
-## Wi-Fi: this Pi 4 cannot see 2.4 GHz
+**Not a 2.4 GHz radio fault.** This runbook previously stated the board sees
+zero 2.4 GHz networks, ever, and fails even a directed probe. That is no longer
+true - after the 2026-09-15 rebuild onto Trixie (kernel 6.18.50) a scan shows
+five 2.4 GHz networks, `tincanphoney24` among them at the strongest signal of
+any AP the board can see. If the fault was ever real, the newer firmware fixed
+it. Note also that the two bands are *separate SSIDs* here, so the old
+"forcing the 2.4 GHz band didn't work" test proved nothing: it was forcing a
+profile for `tincanphoney`, which does not exist on 2.4.
 
-Unexplained and worth knowing before diagnosing anything else. This board:
+**Not the enclosure.** The box ran for months in that same enclosure in that
+same spot, and 2.4 GHz works fine inside it today. The enclosure does not
+change, so it cannot explain a box that stops working.
 
-- sees 5 GHz networks fine, including neighbours at signal 20 (very weak)
-- sees **zero** 2.4 GHz networks, ever
-- fails a *directed* probe for an SSID confirmed to be broadcasting on
-  channel 1 with six clients connected
-- reports both bands supported and channels 1-13 enabled at 20 dBm
-- loads firmware cleanly with no errors in `dmesg`
+### A USB Wi-Fi adapter is not currently needed
 
-So it is 5 GHz-only in practice, on DFS channel 100, with no fallback band.
-Bare on a bench that is fine (-57 dBm, rx 433 Mbit/s). Inside a plastic
-enclosure it drops to about -68 to -70 dBm and the receive rate collapses to
-6 Mbit/s while transmit stays healthy - DHCP then never completes and the box
-silently vanishes from the network.
+Earlier advice here was to buy one. With 2.4 GHz working at -58 dBm that is
+unnecessary. If the box is ever moved somewhere 2.4 also fails, pick one whose
+driver is in the mainline kernel so nothing has to be rebuilt when the kernel
+updates: the **Alfa AWUS036ACM** (MediaTek MT7612U, `mt76x2u`, dual-band,
+detachable antenna) or the cheaper **Panda PAU0B** (RT5572, `rt2800usb`).
+Avoid RTL8811AU/8821AU/8812AU sticks (TP-Link Archer T2U/T3U and most cheap AC
+dongles) - out-of-tree DKMS drivers are exactly the wrong property for an
+appliance that must come back silently after a reboot.
 
-Note the failure is binary, not gradual: rx is either ~400 Mbit/s or 6. The
-same signature appeared with Wi-Fi power save enabled.
+## Wi-Fi: the current configuration
 
-Things tried that did NOT fix it: disabling power save (necessary but not
-sufficient here), pinning the BSSID to the stronger AP, forcing the 2.4 GHz
-band, a static IP, `ipv4.may-fail no`.
+As left on 2026-09-19:
 
-Options if it recurs, cheapest first:
-1. A USB Wi-Fi adapter with an external antenna - gets the antenna out of the
-   enclosure rather than fighting it, and restores 2.4 GHz. The reliable fix.
-2. Reflash onto a newer Raspberry Pi OS, in case the 2.4 GHz fault is the
-   August 2023 firmware blob.
-3. A different board. The Pi 3B is 2.4 GHz-only, which penetrates an enclosure
-   better - but it is slower, and bets on 2.4 working.
+| Profile | Band | Autoconnect | Priority | Powersave |
+|---|---|---|---|---|
+| `tincanphoney24` | 2.4 GHz | yes | 10 | off |
+| `tincanphoney` | 5 GHz | **no** | 0 | off |
+
+The 5 GHz profile is deliberately `autoconnect no`. Left enabled it grabs
+`wlan0` at boot, spends 45 seconds failing DHCP, and can wedge the box off the
+network entirely. It is kept only so it is there if the box is ever moved
+somewhere 5 GHz is strong.
+
+Verified by reboot: `wlan0` came back unattended in about 30 seconds on
+`192.168.2.188`, -59 dBm, 130 Mbit/s, with `nfc-jukebox`, `owntone` and
+`avahi-daemon` all active.
+
+## The outage of 2026-09-19
+
+**Cause: the box had no Wi-Fi configuration at all.** `nmcli con show` listed
+only the wired connection, and `/etc/NetworkManager/system-connections/` was
+empty. The card was rebuilt on 2026-09-15 and re-provisioned on 2026-09-18;
+Raspberry Pi Imager's Wi-Fi setup did not take, and nothing noticed.
+
+`provision.sh` made it silent. Its power-save loop only *modifies* Wi-Fi
+connections that already exist, so with no profile it matched nothing, `|| true`
+swallowed it, and provisioning reported success on a box that could not reach
+the network. It now fails loudly in that case instead.
+
+Worth knowing for next time: the symptom was `jukebox.local` not resolving,
+which looks like mDNS. It was not. The way to tell in one step is to ping-sweep
+the subnet and grep the ARP table for this Pi 4's OUI, `e4:5f:01` - absent
+means it never got a DHCP lease, so the problem is the radio, not the name.
+
+The router lists several stale `jukebox*` entries, all offline: `.188`
+(`E4:5F:01:91:CE:ED`, wlan0) and `.189` (`E4:5F:01:91:CE:EC`, eth0) are this Pi
+4; `.224` and `.225` are `B8:27:EB:...`, earlier boards. The `-1/-2/-3` suffixes
+are the Speedport disambiguating different MACs that all announced the hostname
+`jukebox`. Not a name conflict on the Pi, and not a fault.
 
 ## Common failures
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Box invisible on the network after a reboot | Wi-Fi power save | See above. Check `iw wlan0 link` — rx bitrate at 6 Mbit/s is the tell. |
+| Box invisible and `jukebox.local` does not resolve | Usually no Wi-Fi profile, or `wlan0` on 5 GHz | First: `nmcli con show` — if there is no Wi-Fi connection, that is the whole answer. Confirm the box is absent rather than merely unnamed by ping-sweeping the subnet and grepping the ARP table for `e4:5f:01`; no entry means it never got a DHCP lease, so it is not mDNS. Then check it is on `tincanphoney24`, not `tincanphoney`. |
 | Reader stops responding; log shows `ETIMEDOUT` repeatedly | PN532 wedged out of frame sync, usually by a service restart killing it mid-transaction | Automatic: the reader pulses RSTPDN on GPIO20 after 2 failures and recovers in ~4s. If it does not, check the RSTPDN↔D20 jumper. Manual: `pinctrl set 20 op dl; sleep 1; pinctrl set 20 op dh` |
 | A card plays nothing; status flaps play/pause | Card technology with unstable presence — 4-byte Mifare-style cards report present for ~8ms at a time | Already handled by `presence_debounce_s` (0.5s). If a new card still flaps, raise it. |
 | An album plays shuffled or not from track 1 | Shuffle enabled in OwnTone's UI | The controller forces shuffle/repeat off per card. If it persists, check the log for an error on that call. |
@@ -230,6 +261,10 @@ space once you are happy with the NAS.
 1. `sudo bash deploy/backup.sh` on the old card; copy the archive off.
 2. Burn Raspberry Pi OS Lite 64-bit. In Imager's settings: hostname
    `jukebox`, SSH with your public key, user `pi`, Wi-Fi, locale.
+   **Give it the 2.4 GHz SSID**, and verify after first boot that
+   `nmcli con show` actually lists it — the imager's Wi-Fi silently did not
+   take on the 2026-09-15 rebuild, which is what caused that outage.
+   `provision.sh` now refuses to run if no Wi-Fi profile exists.
 3. `git clone` this repo to `/home/pi/owntone-nfc`.
 4. `sudo bash deploy/provision.sh`
 5. `sudo tar xzf jukebox-state-*.tar.gz -C /`
