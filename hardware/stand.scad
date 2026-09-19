@@ -87,6 +87,22 @@ standoff_d = 6.4; screw_d = 2.3;
 // STANDOFF is the read gap and the thinned window buys nothing. Getting the
 // coil close enough to matter needs a relief opening in the panel for those
 // headers, which the card would hide. Measure first with the gauge below.
+//
+// Each boss is a full-height CONE rather than a post.
+//
+// A plain cylinder projecting from this face is a 90-degree overhang at its
+// root -- its first layers have nothing under them, which is exactly the
+// "floating" it looks like in a render. Tapering the whole boss at 45 degrees
+// means every layer lands on the one below: the face leans back 14 degrees, so
+// the boss axis points 14 degrees below horizontal and the cone's underside
+// ends up 31 degrees from vertical, well inside what prints unsupported.
+//
+// A cone is also far stiffer at the root than a post of the same height, which
+// is where the screw load goes. No hardware, no supports, one part.
+//
+// Printing the whole stand face-down would give vertical bosses and a better
+// show face, but it buries the lip in the bed -- and the lip carries the
+// card's weight every time, so that is the wrong place for a glued joint.
 standoff_h = 11;
 
 /* [PN532 HAT antenna] */
@@ -304,7 +320,8 @@ module pi_standoffs() {
                      y = [-pi_hole_dy/2, pi_hole_dy/2])
                     translate([x, y, 0])
                         difference() {
-                            cylinder(d = standoff_d, h = standoff_h);
+                            cylinder(d1 = standoff_d + 2*standoff_h,
+                                     d2 = standoff_d, h = standoff_h);
                             translate([0, 0, -1])
                                 cylinder(d = screw_d, h = standoff_h + 2);
                         }
