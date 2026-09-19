@@ -63,10 +63,17 @@ inward** as they rise — the taper an arcade cabinet uses, and for the same
 reason: straight sides read as a box, angled ones as a made object. The rake is
 bounded by the card, which is square and cannot be encroached on.
 
-The card drops into a **shallow rebate** in the face rather than leaning on an
-applied shelf, so the front is one clean horizontal line. There is deliberately
-**no hole in the front**: the card leans proud in the rebate and lifts out by
-its face, and a scallop cut in the panel reads as damage rather than detail.
+The card **stands on a lip** and leans back against the face — gravity holds it,
+which is the whole reason for the slant. The felt sits in a **recess** in the
+lip's top so it finishes flush instead of proud, and the lip's underside is
+chamfered back to the face: a ledge projecting from a panel that already leans
+back is a full overhang, and would otherwise need support exactly where the
+finish shows most. There is deliberately **no hole in the front**; a scallop cut
+in the panel reads as damage rather than detail.
+
+The **side walls carry back** to `back_h` of the front height, so the Pi and the
+cavity aren't on show from the side. Lower looks lighter; too low and it's a
+blade on a plinth.
 
 `face_w` takes the **larger** of "wide enough for the card" and "wide enough for
 the Pi wherever your tag offset puts it". That second case is not hypothetical —
