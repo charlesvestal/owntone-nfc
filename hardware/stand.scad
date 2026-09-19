@@ -240,18 +240,34 @@ module card_lip() {
         rotate([-lean, 0, 0])
             rotate([90, 0, 90])
                 linear_extrude(face_w * 2, center = true)
+                    // Ends INSIDE the panel, at neither of its two surfaces.
+                    //
+                    // Stopping at y=0 gives a zero-volume contact and the
+                    // union leaves the lip as a separate shell -- a floating
+                    // region, literally. Stopping at y=face_t instead puts its
+                    // back face exactly on the panel's inner surface, and two
+                    // unioned solids sharing a face outright is what produces
+                    // non-manifold edges. Somewhere between the two, it simply
+                    // overlaps.
                     polygon([
-                        [0, 0],
-                        [0, lip_h],
+                        [face_t - 0.8, 0],
+                        [face_t - 0.8, lip_h],
                         [-lip_depth, lip_h],
                         [-lip_depth, lip_h - lip_face],
                     ]);
         // Clipped to the body's plan, so the lip ends flush with the raked
         // sides and picks up the same corner radius instead of standing out
         // past them as a slab.
+        //
+        // A hair narrower than the body on purpose. Clipped to exactly the
+        // same width, the lip's sides and the body's sides are coincident
+        // faces, and unioning two solids that share a face outright produces
+        // non-manifold edges -- which is what a slicer complains about. 20
+        // microns is a quarter of a layer line and half the nozzle's
+        // resolution: real to CGAL, invisible in plastic.
         translate([0, (depth - lip_depth - 6)/2, 0])
             linear_extrude(top_z, scale = [(face_w - 2*taper) / face_w, 1])
-                rounded_rect(face_w, depth + lip_depth + 6, corner_r);
+                rounded_rect(face_w - 0.02, depth + lip_depth + 6, corner_r);
     }
 }
 
@@ -316,16 +332,19 @@ module cavity() {
 
 module pi_standoffs() {
     rotate([-lean, 0, 0])
-        translate([pi_dx, face_t, card_mid + pi_dy])
+        // Sunk 0.6mm into the panel: a cone whose base sits exactly on the
+        // cavity wall is tangent to it, and the union produces non-manifold
+        // edges where the two surfaces graze.
+        translate([pi_dx, face_t - 0.6, card_mid + pi_dy])
             rotate([-90, 0, 0])
                 for (x = [-pi_hole_dx/2, pi_hole_dx/2],
                      y = [-pi_hole_dy/2, pi_hole_dy/2])
                     translate([x, y, 0])
                         difference() {
                             cylinder(d1 = standoff_d + 2*standoff_h,
-                                     d2 = standoff_d, h = standoff_h);
+                                     d2 = standoff_d, h = standoff_h + 0.6);
                             translate([0, 0, -1])
-                                cylinder(d = screw_d, h = standoff_h + 2);
+                                cylinder(d = screw_d, h = standoff_h + 3);
                         }
 }
 
@@ -350,6 +369,21 @@ assert(width_at_card_top > card + 6,
        "taper is too steep - the sides close in on the card's top corners");
 
 module stand() {
+    // Everything trimmed to z >= 0, so the stand has a genuinely flat bottom.
+    //
+    // Features built in the face's tilted frame do not respect the base plane:
+    // the lip's back corner lands 0.8mm below it and the lower bosses' cones
+    // reach about 0.9mm below, so both hung through the bottom of the part.
+    // That is visible in a render and, worse, makes the degenerate
+    // intersections with the base that a slicer reports as non-manifold.
+    intersection() {
+        _stand_raw();
+        translate([-face_w, -depth, 0])
+            cube([face_w * 2, depth * 3, face_h * 2]);
+    }
+}
+
+module _stand_raw() {
     difference() {
         union() {
             difference() {
