@@ -69,22 +69,46 @@ pi_hole_dx = 58; pi_hole_dy = 49;
 standoff_h = 5; standoff_d = 6.4; screw_d = 2.3;
 
 /* [PN532 HAT antenna] */
-// Offset of the coil from the CENTRE of the Pi board, in the face's own
-// frame: +x right, +z up, seen from the front. MEASURE YOURS -- the cards
-// carry their tag in one corner, so this is what makes the two line up.
-ant_dx = -24; ant_dy = -22;
-ant_w  = 46;  ant_h  = 42;
+// Measured from Waveshare's own dimension drawing for the PN532 NFC HAT
+// (files.waveshare.com, "PN532-NFC-HAT-size.jpg"): the board is 85 x 56 mm --
+// the same footprint as the Pi, not a short 65mm HAT -- and the coil panel is
+// 37.4 x 37.8 mm, centred 17.0 mm along the long axis and 2.3 mm across from
+// the board's centre, on the far side from the GPIO header.
+hat_ant_dx = 17.0;
+hat_ant_dy = 2.3;
+ant_w      = 42;      // window a little larger than the 37.4mm panel
+ant_h      = 42;
+
+// Turning the HAT end-for-end in the stand mirrors that offset, which is
+// usually what decides whether the coil can reach the tag at all.
+hat_flipped = true;
+
+/* [Where the tag sits on the card] */
+// Centre of the tag relative to the centre of the card, seen from the FRONT,
+// +x right and +y up. Stickers applied with the tag at the lower right *as
+// seen from the back* land at the lower LEFT from the front, so both are
+// negative. This is the one thing worth measuring off your own cards.
+tag_dx = -24;
+tag_dy = -24;
 
 $fn = 64;
 
 // --- derived -----------------------------------------------------------
+// The coil must land on the tag, so the tag's position drives where the Pi
+// goes -- not the reverse. ant_dx/ant_dy are the coil's position in the face's
+// frame; pi_dx/pi_dy are where the board centre must sit to put it there.
+ant_dx = tag_dx;
+ant_dy = tag_dy;
+pi_dx  = tag_dx - (hat_flipped ? -hat_ant_dx : hat_ant_dx);
+pi_dy  = tag_dy - (hat_flipped ? -hat_ant_dy : hat_ant_dy);
+
 // Wide enough for the card, and for the Pi wherever the tag offset puts it.
 //
 // Taking the max rather than trusting side_margin, because the failure it
 // prevents is silent: a mounting boss that lands on the side wall merges into
 // it and simply disappears from the render, so you discover it when the Pi
 // will not screw down.
-boss_reach = abs(ant_dx) + pi_hole_dx/2 + standoff_d/2 + wall + 2.5;
+boss_reach = abs(pi_dx) + pi_hole_dx/2 + standoff_d/2 + wall + 2.5;
 face_w   = max(card + 2*side_margin, 2*boss_reach);
 face_h   = lip_h + card + top_margin;
 card_mid = lip_h + card/2;                  // card centre, up the face
@@ -95,6 +119,7 @@ top_z    = face_h * cos(lean);      // the body's height in world z
 // eat into them -- a card that fouls the rake would sit proud at the top and
 // the whole thing would look like a mistake.
 card_top_z = (lip_h + card) * cos(lean);
+
 width_at_card_top = face_w - 2*taper * card_top_z/top_z;
 
 // --- helpers -----------------------------------------------------------
@@ -249,7 +274,7 @@ module cavity() {
 
 module pi_standoffs() {
     rotate([-lean, 0, 0])
-        translate([ant_dx, face_t, card_mid + ant_dy])
+        translate([pi_dx, face_t, card_mid + pi_dy])
             rotate([-90, 0, 0])
                 for (x = [-pi_hole_dx/2, pi_hole_dx/2],
                      y = [-pi_hole_dy/2, pi_hole_dy/2])
@@ -271,10 +296,12 @@ module vents() {
 // The Pi's position is driven by the tag in the card, via ant_dx/ant_dy. Push
 // it too far and the mounting bosses disappear into the side wall, which is
 // invisible in a render -- they simply merge with it.
-assert(abs(ant_dx) + pi_hole_dx/2 + standoff_d/2 < face_w/2 - wall,
-       "ant_dx puts the Pi's bosses into the side wall - widen side_margin, or turn the Pi 180 degrees to flip the antenna offset");
-assert(card_mid + ant_dy - pi_hole_dy/2 - standoff_d/2 > base_t,
-       "ant_dy puts the Pi's lower bosses into the base - raise lip_h");
+assert(abs(pi_dx) + pi_hole_dx/2 + standoff_d/2 < face_w/2 - wall,
+       "the tag position puts the Pi's bosses into the side wall - try hat_flipped, or widen side_margin");
+assert(card_mid + pi_dy - pi_hole_dy/2 - standoff_d/2 > base_t,
+       "the tag sits so low that the Pi's bosses reach the base - raise lip_h, or try hat_flipped");
+assert(abs(tag_dx) + ant_w/2 <= card/2 + 2 && abs(tag_dy) + ant_h/2 <= card/2 + 2,
+       "the tag is so near the card's edge that the coil window runs off it - check tag_dx/tag_dy");
 
 assert(width_at_card_top > card + 6,
        "taper is too steep - the sides close in on the card's top corners");
