@@ -64,6 +64,13 @@ lip_face   = 3.5;     // height of the lip's own front face, above its chamfer
 // properly. Invisible in plastic, the difference between a valid mesh and one
 // a slicer refuses.
 lip_inset  = corner_r + 0.4;
+lip_return = 15;      // radius the lip's ends sweep back on, dying into the
+                      // face. Much larger than corner_r on purpose: at the
+                      // body's own 5mm the lip stopped rather than returned,
+                      // and its flat end ran straight into the face. A long
+                      // sweep reads as one S from the body's curve into the
+                      // lip's.
+concave_r  = 0.9;     // softens the crease where the lip's top meets the face
 felt_inset = 1.5;     // felt recess held back from the front edge
 felt_w     = 6;       // recess for the felt strip, 0 to leave the lip flat
 felt_t     = 1.2;
@@ -163,6 +170,8 @@ boss_reach = abs(pi_dx) + pi_hole_dx/2 + standoff_d/2 + wall + 2.5;
 face_w   = max(card + 2*side_margin, 2*boss_reach);
 face_h   = lip_h + card + top_margin;
 card_mid = lip_h + card/2;                  // card centre, up the face
+// The flat run of the lip, before its ends start sweeping back.
+felt_span = face_w - 2*lip_inset - 2*lip_return;
 lean_x   = face_h * sin(lean);
 top_z    = face_h * cos(lean);      // the body's height in world z
 top_y    = face_h * sin(lean);      // and how far its top has leaned back
@@ -209,7 +218,12 @@ module side_profile() {
     // the standoffs are all built in a frame rotated by that angle. The lip is
     // part of this outline rather than a solid unioned on afterwards, so there
     // is only one silhouette to round.
+    // Two passes. The inner pair is a closing, which rounds CONCAVE corners
+    // -- the crease where the lip's top surface meets the face, which was
+    // otherwise left knife-sharp. The outer pair is an opening, which rounds
+    // the convex ones.
     offset(r = r) offset(r = -r)
+    offset(r = -concave_r) offset(r = concave_r)
         polygon([
             [P_base, 0],
             P_lip_lo,
@@ -223,10 +237,10 @@ module side_profile() {
 
 // A thin rounded slab spanning y_front..depth at width w, used to loft the
 // plan that carries the corner radius.
-module plan_slab(w, y_front) {
+module plan_slab(w, y_front, r = corner_r) {
     linear_extrude(0.01)
         translate([0, (y_front + depth) / 2])
-            offset(r = corner_r) offset(r = -corner_r)
+            offset(r = r) offset(r = -r)
                 square([w, depth - y_front], center = true);
 }
 
@@ -255,16 +269,17 @@ module body() {
             // into the body's corner, sharing its radius, so the two meet
             // tangentially instead of colliding.
             hull() { translate([0, 0, 0])
-                         plan_slab(width_at(0) - 2*lip_inset, P_base);
+                         plan_slab(width_at(0) - 2*lip_inset, P_base,
+                                   lip_return);
                      translate([0, 0, P_lip_lo[1]])
                          plan_slab(width_at(P_lip_lo[1]) - 2*lip_inset,
-                                   P_lip_lo[0]); }
+                                   P_lip_lo[0], lip_return); }
             hull() { translate([0, 0, P_lip_lo[1]])
                          plan_slab(width_at(P_lip_lo[1]) - 2*lip_inset,
-                                   P_lip_lo[0]);
+                                   P_lip_lo[0], lip_return);
                      translate([0, 0, P_lip_hi[1]])
                          plan_slab(width_at(P_lip_hi[1]) - 2*lip_inset,
-                                   P_lip_hi[0]); }
+                                   P_lip_hi[0], lip_return); }
             // the body proper, from the base up
             hull() { translate([0, 0, 0]) plan_slab(width_at(0), face_t);
                      translate([0, 0, P_lip_hi[1]])
@@ -282,9 +297,13 @@ module body() {
 
 module felt_recess() {
     if (felt_w > 0)
+        // Confined to the lip's flat span, so it stops before the ends sweep
+        // back. Run full width it carried on out into the return and finished
+        // in mid-air, which looks like the recess was cut by someone who had
+        // not noticed the lip was curving away.
         rotate([-lean, 0, 0])
-            translate([-face_w, -lip_depth + felt_inset, lip_h - felt_t])
-                cube([face_w * 2, felt_w, felt_t + 1]);
+            translate([-felt_span/2, -lip_depth + felt_inset, lip_h - felt_t])
+                cube([felt_span, felt_w, felt_t + 1]);
 }
 
 module antenna_window() {
