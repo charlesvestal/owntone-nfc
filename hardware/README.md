@@ -5,7 +5,7 @@ mounted directly behind it and **the back left open**.
 
 ![render](stand-render.png)
 
-Rendered above: front, and the open back.
+Rendered above: front, three-quarter, and the open back.
 
 The open back is the whole idea. The Pi's ports face into it, so cables plug
 straight into the board — no panel cutouts to get wrong, no internal extension
@@ -58,13 +58,15 @@ Every visible edge is chamfered and the vertical corners radiused, so the form
 catches light along its arrises instead of showing a raw printed corner. A
 **shadow reveal** runs round the base, which lifts the body optically and hides
 the layer banding a first print always shows low down where the part is widest.
-The top is **cut back** rather than coming to a point, so the silhouette reads
-as a cabinet rather than a wedge.
+The top is **cut back** rather than coming to a point, and the sides **rake
+inward** as they rise — the taper an arcade cabinet uses, and for the same
+reason: straight sides read as a box, angled ones as a made object. The rake is
+bounded by the card, which is square and cannot be encroached on.
 
 The card drops into a **shallow rebate** in the face rather than leaning on an
 applied shelf, so the front is one clean horizontal line. There is deliberately
-no thumb notch: the card leans proud in the rebate and lifts out by its face,
-and a scallop cut in the panel reads as damage rather than detail.
+**no hole in the front**: the card leans proud in the rebate and lifts out by
+its face, and a scallop cut in the panel reads as damage rather than detail.
 
 `face_w` takes the **larger** of "wide enough for the card" and "wide enough for
 the Pi wherever your tag offset puts it". That second case is not hypothetical —

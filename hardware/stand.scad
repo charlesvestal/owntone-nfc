@@ -46,7 +46,9 @@ chamfer    = 1.2;     // on every visible edge
 reveal_h   = 3;       // shadow groove round the base
 reveal_d   = 1.8;
 reveal_z   = 6;       // how far up the body it sits
+taper      = 9;       // how far the sides rake in, per side, bottom to top
 slot_depth = 6;       // how far the card's bottom edge sinks in
+rebate_d   = 1.4;     // how deep into the panel the card's rebate is cut
 
 /* [Shell] */
 face_t     = 3.2;     // panel thickness away from the reader
@@ -80,6 +82,13 @@ face_w   = max(card + 2*side_margin, 2*boss_reach);
 face_h   = rail_h + card + top_margin;
 card_mid = rail_h - slot_depth + card/2;     // card centre, up the face
 lean_x   = face_h * sin(lean);
+top_z    = face_h * cos(lean);      // the body's height in world z
+
+// Width still available where the card's top corners sit. The taper must not
+// eat into them -- a card that fouls the rake would sit proud at the top and
+// the whole thing would look like a mistake.
+card_top_z = (rail_h - slot_depth + card) * cos(lean);
+width_at_card_top = face_w - 2*taper * card_top_z/top_z;
 
 // --- helpers -----------------------------------------------------------
 
@@ -104,7 +113,6 @@ module side_profile() {
     // you can actually touch. Offsetting this edge instead put the *outer*
     // surface at y=face_t, exactly where the cavity began, and the hollowing
     // then removed the entire panel.
-    top_z = face_h * cos(lean);
     top_y = face_h * sin(lean);
     offset(r = r) offset(r = -r)
         polygon([
@@ -121,9 +129,14 @@ module body() {
         translate([-face_w, 0, 0])
             rotate([90, 0, 90])
                 linear_extrude(face_w * 2) side_profile();
-        // ...trimmed in plan, which rounds the four vertical corners
+        // ...trimmed in plan, which rounds the four vertical corners and
+        // rakes the sides inward as they rise -- the taper an arcade cabinet
+        // uses, and for the same reason: straight sides read as a box, angled
+        // ones as a made object. Depth is left alone (scale [sx, 1]) so the
+        // footprint stays stable and the back stays square to the world.
         translate([0, depth/2, 0])
-            linear_extrude(face_h * 2) rounded_rect(face_w, depth, corner_r);
+            linear_extrude(top_z, scale = [(face_w - 2*taper) / face_w, 1])
+                rounded_rect(face_w, depth, corner_r);
     }
 }
 
@@ -149,18 +162,29 @@ module card_slot() {
     // the front reads as two horizontal lines instead of a bolted-on ledge.
     rotate([-lean, 0, 0])
         translate([-(card + 1.5)/2, -0.5, rail_h - slot_depth])
-            cube([card + 1.5, card_t + 0.5, slot_depth + 1]);
+            cube([card + 1.5, rebate_d + 0.5, slot_depth + 1]);
 }
 
 module antenna_window() {
     // Thinned from BEHIND: the outside stays flat and rigid, the reader only
     // sees window_t of plastic.
-    rotate([-lean, 0, 0])
-        translate([ant_dx - ant_w/2, window_t, card_mid + ant_dy - ant_h/2])
-            // Runs well past the panel's inner surface on purpose: ending
-            // flush with the cavity leaves two coincident faces, which render
-            // as speckle and can confuse a slicer.
-            cube([ant_w, face_t - window_t + 4, ant_h]);
+    // Clipped to stay above the rail. The window leaves window_t of material
+    // measured from the FRONT, and the card rebate removes rebate_d from that
+    // same front face -- so anywhere the two overlap there is nothing left at
+    // all, whatever the panel thickness, and the face opens into a slot. The
+    // coil can lose its bottom few millimetres harmlessly; a hole in the front
+    // of the stand it cannot.
+    intersection() {
+        rotate([-lean, 0, 0])
+            translate([ant_dx - ant_w/2, window_t, card_mid + ant_dy - ant_h/2])
+                // Runs past the panel's inner surface on purpose: ending flush
+                // with the cavity leaves coincident faces, which render as
+                // speckle and can confuse a slicer.
+                cube([ant_w, face_t - window_t + 4, ant_h]);
+        rotate([-lean, 0, 0])
+            translate([-face_w, -face_t, rail_h + 1.5])
+                cube([face_w * 2, face_t * 6, face_h * 2]);
+    }
 }
 
 module cavity() {
@@ -207,6 +231,16 @@ assert(abs(ant_dx) + pi_hole_dx/2 + standoff_d/2 < face_w/2 - wall,
        "ant_dx puts the Pi's bosses into the side wall - widen side_margin, or turn the Pi 180 degrees to flip the antenna offset");
 assert(card_mid + ant_dy - pi_hole_dy/2 - standoff_d/2 > base_t,
        "ant_dy puts the Pi's lower bosses into the base - raise rail_h");
+
+// The rebate is cut from the front and the antenna window from the back. If
+// the tag sits low on the card they overlap at the rail, and if they are deep
+// enough between them they meet and open a slot straight through the face --
+// which is exactly what happened the first time.
+assert(rebate_d < face_t - 0.8,
+       "card rebate is too deep for the panel - thin rebate_d or thicken face_t");
+
+assert(width_at_card_top > card + 6,
+       "taper is too steep - the sides close in on the card's top corners");
 
 module stand() {
     difference() {
