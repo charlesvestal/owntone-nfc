@@ -45,11 +45,11 @@ back_h      = 0.74;   // side walls' height at the back, as a fraction of the
 
 /* [Detail] */
 corner_r   = 5;       // radius on the vertical corners
+// No shadow reveal round the base. There was one, to lift the body optically,
+// but the lip covers it across the front -- so it ran three-quarters of the
+// way round and stopped, which reads as a mistake rather than a detail. The
+// lip already gives the front its horizontal line.
 chamfer    = 1.2;     // on every visible edge
-reveal_h   = 2.5;     // shadow groove round the base
-reveal_d   = 1.8;
-reveal_z   = 2.5;     // sits BELOW the lip, so the two read as separate
-                      // lines rather than merging into one heavy plinth
 taper      = 9;       // how far the sides rake in, per side, bottom to top
 lip_depth  = 9;       // how far the lip projects from the face
 lip_face   = 3.5;     // height of the lip's own front face, above its chamfer
@@ -210,18 +210,6 @@ module body() {
             linear_extrude(top_z, scale = [(face_w - 2*taper) / face_w, 1])
                 rounded_rect(face_w, depth, corner_r);
     }
-}
-
-module reveal_groove() {
-    // A shadow line round the base. Optically it lifts the body off the
-    // surface, and it hides the layer banding that a first print always shows
-    // low down where the part is widest.
-    translate([0, depth/2, reveal_z])
-        linear_extrude(reveal_h)
-            difference() {
-                rounded_rect(face_w + 4, depth + 4, corner_r);
-                rounded_rect(face_w - 2*reveal_d, depth - 2*reveal_d, corner_r);
-            }
 }
 
 // Face features are placed in the face's own frame: local x across the
@@ -389,7 +377,6 @@ module _stand_raw() {
             difference() {
                 body();
                 cavity();
-                reveal_groove();
             }
             card_lip();
             pi_standoffs();
