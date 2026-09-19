@@ -154,6 +154,7 @@ face_h   = lip_h + card + top_margin;
 card_mid = lip_h + card/2;                  // card centre, up the face
 lean_x   = face_h * sin(lean);
 top_z    = face_h * cos(lean);      // the body's height in world z
+top_y    = face_h * sin(lean);      // and how far its top has leaned back
 
 // Width still available where the card's top corners sit. The taper must not
 // eat into them -- a card that fouls the rake would sit proud at the top and
@@ -161,6 +162,21 @@ top_z    = face_h * cos(lean);      // the body's height in world z
 card_top_z = (lip_h + card) * cos(lean);
 
 width_at_card_top = face_w - 2*taper * card_top_z/top_z;
+
+// Key points of the side outline, shared by the profile and by the plan that
+// rounds the vertical edges. Converted from the face's frame (y into the
+// panel, z up the slope) into world y/z.
+function fy(y, z) = y * cos(lean) + z * sin(lean);
+function fz(y, z) = -y * sin(lean) + z * cos(lean);
+
+lip_back   = face_t - 0.8;                    // the lip ends inside the panel
+P_lip_lo   = [fy(-lip_depth, lip_h - lip_face), fz(-lip_depth, lip_h - lip_face)];
+P_lip_hi   = [fy(-lip_depth, lip_h), fz(-lip_depth, lip_h)];
+P_meet     = [fy(0, lip_h), fz(0, lip_h)];    // lip top meets the face
+P_cham_end = [fy(lip_back, 0), fz(lip_back, 0)];
+// where the chamfer under the lip crosses the base plane
+_t         = P_lip_lo[1] / (P_lip_lo[1] - P_cham_end[1]);
+P_base     = P_lip_lo[0] + _t * (P_cham_end[0] - P_lip_lo[0]);
 
 // --- helpers -----------------------------------------------------------
 
@@ -178,68 +194,69 @@ module side_profile() {
     // whole and the lip came out as a fat bullnose; 1.2 leaves it a legible
     // face with a softened edge.
     r = 1.2;
-    // The front face must run at exactly `lean`, because the cavity, the card
-    // lip and the standoffs are all built in a frame rotated by that angle.
-    //
-    // The lip is part of THIS profile rather than a solid unioned on
-    // afterwards. Added separately it was clipped to its own plan, so across
-    // the body's corner radius the body curved inward while the lip stayed
-    // full width -- the lip overhung the curve and ended in a square edge,
-    // which is the "curve into a hard edge" you can see on the corner. In the
-    // profile there is only one outline, so the rounding is continuous.
-    top_z = face_h * cos(lean);
-    top_y = face_h * sin(lean);
-
-    // The lip's corners, converted from the face's frame (y into the panel,
-    // z up the slope) into this profile's world y/z.
-    function fy(y, z) = y * cos(lean) + z * sin(lean);
-    function fz(y, z) = -y * sin(lean) + z * cos(lean);
-    back  = face_t - 0.8;                     // ends inside the panel
-    lip_front_low  = [fy(-lip_depth, lip_h - lip_face),
-                      fz(-lip_depth, lip_h - lip_face)];
-    lip_front_high = [fy(-lip_depth, lip_h), fz(-lip_depth, lip_h)];
-    lip_meets_face = [fy(0, lip_h), fz(0, lip_h)];
-    // Where the chamfer under the lip crosses the base plane.
-    chamfer_end = [fy(back, 0), fz(back, 0)];
-    t = lip_front_low[1] / (lip_front_low[1] - chamfer_end[1]);
-    chamfer_at_base = lip_front_low[0] + t * (chamfer_end[0] - lip_front_low[0]);
-
+    // The front face runs at exactly `lean`, because the cavity, the lip and
+    // the standoffs are all built in a frame rotated by that angle. The lip is
+    // part of this outline rather than a solid unioned on afterwards, so there
+    // is only one silhouette to round.
     offset(r = r) offset(r = -r)
         polygon([
-            [chamfer_at_base, 0],
-            lip_front_low,
-            lip_front_high,
-            lip_meets_face,
+            [P_base, 0],
+            P_lip_lo,
+            P_lip_hi,
+            P_meet,
             [top_y, top_z],
             [depth, top_z * back_h],
             [depth, 0],
         ]);
 }
 
+// A thin rounded slab spanning y_front..depth at width w, used to loft the
+// plan that carries the corner radius.
+module plan_slab(w, y_front) {
+    linear_extrude(0.01)
+        translate([0, (y_front + depth) / 2])
+            offset(r = corner_r) offset(r = -corner_r)
+                square([w, depth - y_front], center = true);
+}
+
+function width_at(z) = face_w - 2 * taper * z / top_z;
+
 module body() {
     intersection() {
-        // the wedge, extruded wide enough to be trimmed
         translate([-face_w, 0, 0])
             rotate([90, 0, 90])
                 linear_extrude(face_w * 2) side_profile();
-        // ...trimmed in plan, which rounds the four vertical corners and
-        // rakes the sides inward as they rise -- the taper an arcade cabinet
-        // uses, and for the same reason: straight sides read as a box, angled
-        // ones as a made object. Depth is left alone (scale [sx, 1]) so the
-        // footprint stays stable and the back stays square to the world.
-        // Reaching forward far enough to cover the lip, so the lip and the
-        // face share one rounded outline instead of two that disagree.
-        translate([0, (depth - lip_depth - 2)/2, 0])
-            linear_extrude(top_z, scale = [(face_w - 2*taper) / face_w, 1])
-                rounded_rect(face_w, depth + lip_depth + 2, corner_r);
+
+        // The plan that rounds the vertical edges, LOFTED so its corner arcs
+        // follow the front of the object instead of sitting at one fixed
+        // depth.
+        //
+        // A single rounded rectangle only rounds its own four corners. The
+        // face leans back, so those arcs stopped matching it within a few
+        // millimetres of the base and the whole front was left with square
+        // arrises; the lip, further forward again, met them as flat slabs
+        // running into a curve. Lofting between slabs whose fronts track the
+        // silhouette keeps one continuous radius up the face, around the lip
+        // and through the corner between them.
+        union() {
+            // up the chamfer, then the lip's front face
+            hull() { translate([0, 0, 0]) plan_slab(width_at(0), P_base);
+                     translate([0, 0, P_lip_lo[1]])
+                         plan_slab(width_at(P_lip_lo[1]), P_lip_lo[0]); }
+            hull() { translate([0, 0, P_lip_lo[1]])
+                         plan_slab(width_at(P_lip_lo[1]), P_lip_lo[0]);
+                     translate([0, 0, P_lip_hi[1]])
+                         plan_slab(width_at(P_lip_hi[1]), P_lip_hi[0]); }
+            // and on up the leaning face
+            hull() { translate([0, 0, P_lip_hi[1]])
+                         plan_slab(width_at(P_lip_hi[1]),
+                                   P_lip_hi[1] * tan(lean));
+                     translate([0, 0, top_z])
+                         plan_slab(width_at(top_z), top_y); }
+        }
     }
 }
 
-// Face features are placed in the face's own frame: local x across the
-// width, y into the panel, z up the slope. The body leans in the YZ plane
-// (side_profile is extruded along X), so that frame is a rotation about the
-// X axis -- rotating about Y instead tilts everything sideways and leaves the
-// standoffs hanging in front of the panel.
 module felt_recess() {
     if (felt_w > 0)
         rotate([-lean, 0, 0])
