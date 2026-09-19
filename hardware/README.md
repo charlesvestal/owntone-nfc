@@ -45,9 +45,22 @@ Defaults give a 112 × 110 mm face, 62 mm deep, for a 95 mm card. Everything is
 parametric — card size, lean, lip, panel thickness, Pi hole spacing, antenna
 window — at the top of `stand.scad`.
 
-**Set `ant_dx` / `ant_dy` from your own HAT.** That's where the PN532's coil
-sits relative to the centre of the Pi board, and it positions the thinned
-window. The default assumes the antenna is off to one side, as on this HAT.
+**Measure the tag, not the HAT.** The HAT is already in the file: Waveshare's
+own dimension drawing gives an 85 x 56 mm board — the same footprint as the Pi,
+not a short 65 mm HAT — with a 37.4 x 37.8 mm coil panel centred 17.0 mm along
+the long axis and 2.3 mm across from the board centre, on the far side from the
+GPIO header.
+
+So the only thing to measure is where the tag sits on your cards. Set `tag_dx` /
+`tag_dy` — its centre relative to the card's centre, seen from the **front**,
++x right and +y up. Stickers applied with the tag at the lower right *as seen
+from the back* land at the lower left from the front, so both are negative.
+
+The model then works out where the Pi has to go to put the coil on the tag, and
+`hat_flipped` mirrors the offset by turning the HAT end-for-end — which is
+usually what decides whether the coil can reach the tag at all. Three assertions
+catch the ways this goes wrong: bosses in the side wall, bosses in the base, and
+a coil window running off the edge of the card.
 
 The panel is thinned **from behind**, so the outside stays flat and rigid
 while the reader only has `window_t` of plastic to see through.
