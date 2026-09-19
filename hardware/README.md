@@ -95,11 +95,8 @@ while the reader only has `window_t` of plastic to see through.
 ## Design notes
 
 Every visible edge is chamfered and the vertical corners radiused, so the form
-catches light along its arrises instead of showing a raw printed corner. A
-**shadow reveal** runs round the base, which lifts the body optically and hides
-the layer banding a first print always shows low down where the part is widest.
-The top is **cut back** rather than coming to a point, and the sides **rake
-inward** as they rise — the taper an arcade cabinet uses, and for the same
+catches light along its arrises instead of showing a raw printed corner. The top
+is **cut back** rather than coming to a point, and the sides **rake inward** as they rise — the taper an arcade cabinet uses, and for the same
 reason: straight sides read as a box, angled ones as a made object. The rake is
 bounded by the card, which is square and cannot be encroached on.
 
@@ -114,6 +111,11 @@ in the panel reads as damage rather than detail.
 The **side walls carry back** to `back_h` of the front height, so the Pi and the
 cavity aren't on show from the side. Lower looks lighter; too low and it's a
 blade on a plinth.
+
+There was a shadow reveal round the base too, to lift the body optically. It is
+gone: the lip covers it across the front, so it ran three-quarters of the way
+round and stopped, which reads as a mistake rather than a detail. The lip
+already gives the front its horizontal line.
 
 `face_w` takes the **larger** of "wide enough for the card" and "wide enough for
 the Pi wherever your tag offset puts it". That second case is not hypothetical —
