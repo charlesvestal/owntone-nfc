@@ -58,8 +58,13 @@ felt_w     = 6;       // recess for the felt strip, 0 to leave the lip flat
 felt_t     = 1.2;
 
 /* [Shell] */
-face_t     = 3.2;     // panel thickness away from the reader
-window_t   = 1.2;     // thinned panel over the reader antenna
+face_t     = 3.2;     // panel thickness
+// Thinned panel over the coil. Equal to face_t = no thinning, which is the
+// right default here: with the HAT on ~11mm standoffs the coil is ~14mm from
+// the card, so the panel is a small part of the gap and thinning it only
+// leaves a weak patch behind the card for nothing. Drop it to ~1.2 only in the
+// close-mounted variant, where the HAT nearly touches the panel.
+window_t   = 3.2;
 wall       = 3;
 base_t     = 4;
 
