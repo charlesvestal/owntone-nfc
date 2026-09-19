@@ -200,3 +200,43 @@ def test_print_resolution_outranks_sharpness_of_a_doubtful_match():
     ranked = rank_candidates([_candidate("deezer:right", 1000, 0.9),
                               _candidate("itunes:wrong", 900, 0.9)], 1000)
     assert ranked[0]["width"] == 1000
+
+
+# --- converting sources that are not JPEG ----------------------------------
+#
+# The print sheets embed JPEG data directly, so anything arriving as PNG has to
+# be converted first. This used to shell out to `sips`, which exists only on
+# macOS -- on the Pi that raised FileNotFoundError and the sheets endpoint
+# returned a 500.
+
+
+def _png(path, mode="RGB", size=(8, 8), colour=(10, 20, 30)):
+    from PIL import Image
+    Image.new(mode, size, colour).save(path, format="PNG")
+    return str(path)
+
+
+def test_a_jpeg_source_is_returned_untouched(tmp_path):
+    """Nothing is re-encoded on the way into the PDF."""
+    from nfc_jukebox.cardart.sheets import as_jpeg
+    data = _jpeg(600, 600)
+    path = tmp_path / "cover.jpg"
+    path.write_bytes(data)
+    assert as_jpeg(str(path)) == data
+
+
+def test_a_png_source_is_converted_to_jpeg(tmp_path):
+    from nfc_jukebox.cardart.sheets import as_jpeg
+    out = as_jpeg(_png(tmp_path / "cover.png"))
+    assert out[:2] == b"\xff\xd8", "expected JPEG data"
+    assert image_size(out) == (8, 8)
+
+
+def test_a_transparent_png_flattens_onto_white_not_black(tmp_path):
+    """JPEG has no alpha. Transparent corners must not come out black."""
+    from PIL import Image
+    from nfc_jukebox.cardart.sheets import as_jpeg
+    path = tmp_path / "cover.png"
+    Image.new("RGBA", (8, 8), (0, 0, 0, 0)).save(path, format="PNG")
+    with Image.open(__import__("io").BytesIO(as_jpeg(str(path)))) as img:
+        assert img.convert("RGB").getpixel((0, 0)) == (255, 255, 255)

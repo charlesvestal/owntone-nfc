@@ -7,6 +7,10 @@ dependencies = [
     "PyYAML>=6.0",
     "Flask>=3.0",
     "nfcpy>=1.0",
+    # Only for converting the occasional PNG cover into the JPEG the print
+    # sheets embed. This used to be a call to `sips`, which ships with macOS
+    # and does not exist on the Pi, so the sheets endpoint 500'd on the box.
+    "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]
