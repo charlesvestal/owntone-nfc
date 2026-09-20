@@ -240,11 +240,24 @@ Three details that matter:
   reason, so a missing NAS produces a page that explains itself instead of a
   box that looks dead.
 - **`nofail`** so a NAS that is off or asleep cannot stop the Pi booting.
-- **Nightly rescan** via `/etc/cron.d/owntone-rescan`. Network mounts send no
-  inotify events, so OwnTone never notices new albums on its own. The mount is
-  read-only so OwnTone's `.init-rescan` trigger file is not an option; the cron
-  calls `PUT /api/update` instead. Trigger one by hand from OwnTone's web UI or
-  `curl -X PUT localhost:3689/api/update`.
+- **Rescanning.** Network mounts send no inotify events, so OwnTone never
+  notices new albums on its own, and the mount is read-only so OwnTone's
+  `.init-rescan` trigger file is not an option either. `PUT /api/update` is the
+  only route.
+
+  **The nightly cron at 04:30 has probably never run.** `/etc/cron.d/owntone-rescan`
+  is correct and cron is healthy, but the box is switched off overnight, and
+  without `anacron` a missed `cron.d` job is never caught up. Found 2026-09-20:
+  OwnTone's `updated_at` was stuck three days back, and two manual scans took it
+  from 168 to 172 albums and 2085 to 2153 songs - four albums and 68 songs it had
+  never seen.
+
+  Use the **Rescan library** button on the admin page's System tab. It reports
+  progress and the new counts. By hand:
+  `curl -X PUT http://jukebox.local:3689/api/update`.
+
+  The durable fix is a systemd timer with `Persistent=true`, which runs a missed
+  job shortly after boot instead of skipping it. Not done yet.
 
 The initial bulk scan of ~2,000 files took **520 seconds** over SMB on Wi-Fi.
 That is a one-time cost; incremental scans are much faster.
@@ -320,3 +333,22 @@ Re-measure with `spikes/presence_check.py` against the built box rather than
 guessing. Note the original measurement was taken on one card type and did not
 generalise: an NTAG213 held continuously for 11s, a 4-byte card dropped out
 every 8ms. **Measure with the worst card you own, not the first one to hand.**
+
+## Card technology: buy NTAG21x, not Mifare Classic
+
+The UID tells you which you have: **7 bytes starting `04`** is an NTAG (good);
+**4 bytes** is Mifare-Classic-style (flickers). As of 2026-09-20 the registry
+holds 78 of the bad kind and 54 of the good.
+
+This is not academic. The unexplained play/pause glitch on 2026-09-19 was
+`acd997ee` - José González/Veneer, a 4-byte card. The log showed a pause and a
+resume 0.9s apart, meaning roughly 1.4s of continuous absence from a card that
+had not moved. That is the documented flicker running longer than
+`presence_debounce_s` absorbs, not a mechanical problem.
+
+Buy **NTAG213 or NTAG215**, 25-30mm round wet inlay. The chip name must be in
+the listing; "13.56MHz NFC sticker" with no chip named is usually Mifare
+Classic. 213/215/216 differ only in memory, which is irrelevant - this project
+never writes to a tag, it reads the UID and nothing else. Avoid on-metal
+(ferrite) tags, and avoid UID-changeable "magic" tags: unpredictable presence
+is the exact failure this reader is most sensitive to.
