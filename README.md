@@ -86,13 +86,22 @@ clock and gives a reader that works only intermittently).
 
 ### Card types
 
-Different tags report presence very differently — some continuously, some in
-bursts of a few milliseconds. Presence is debounced in software to cope, tuned
-by `presence_debounce_s`.
+**Buy NTAG213 or NTAG215.** Different tags report presence very differently,
+and the gap is not subtle: motionless on the same reader, an NTAG213 held
+continuously for 11 seconds, while a 4-byte Mifare-Classic-style card flickered
+through 725 present/absent cycles in 25. That flicker is how the PN532 answers
+a re-select for that technology, not the card moving.
 
-If cards stutter or fail to play, measure yours with
-`spikes/presence_check.py` and raise that value. Measure with your least
-reliable card, not the first one to hand.
+The UID tells you which you have — 7 bytes starting `04` is an NTAG, 4 bytes is
+Mifare-Classic-style. Insist on the chip name in the listing; "13.56MHz NFC
+sticker" with no chip named is usually the wrong one. 213, 215 and 216 differ
+only in memory, which does not matter here: the card carries no data, only its
+UID.
+
+Presence is debounced in software to cope, tuned by `presence_debounce_s`. If
+cards stutter or fail to play, measure yours with `spikes/presence_check.py`
+and raise that value. Measure with your least reliable card, not the first one
+to hand.
 
 ### If it goes in an enclosure
 
