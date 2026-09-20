@@ -229,6 +229,32 @@ class OwnTone:
             return len(body.get("items") or [])
         return int(count)
 
+    def update_library(self) -> None:
+        """Ask OwnTone to rescan the library. Returns once the scan is queued.
+
+        The library lives on a read-only network mount, so OwnTone receives no
+        inotify events and its `.init-rescan` trigger file cannot be written.
+        This API call is the only way to make it notice a new album.
+        """
+        self._request("PUT", "/api/update")
+
+    def library_status(self) -> dict:
+        """Counts, and whether a scan is in progress."""
+        return self._request("GET", "/api/library").json()
+
+    def queue_holds_album(self, relative_path: str) -> bool:
+        """Whether the queue is already this album.
+
+        OwnTone outlives this service, so after a restart the record may still
+        be turning. Matching on the first item's path the same way play_album
+        matches keeps the library root out of here: OwnTone reports absolute
+        paths and only it knows where the library lives.
+        """
+        items = self._request("GET", "/api/queue").json().get("items") or []
+        if not items:
+            return False
+        return f"/{relative_path.strip('/')}/" in (items[0].get("path") or "")
+
     def album_artwork_url(self, relative_path: str) -> str | None:
         """OwnTone-relative artwork URL for the album at this path, if any.
 

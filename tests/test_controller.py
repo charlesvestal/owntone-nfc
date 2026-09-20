@@ -59,6 +59,8 @@ class FakeOwnTone:
         # "the side has run out" is only visible as the player stopping.
         self.queue = 0
         self.player = "stop"
+        # Which album the queue holds, so a restart can recognise it.
+        self.queue_album: str | None = None
 
     def _ids(self, predicate):
         return [o["id"] for o in self.outputs if predicate(o)]
@@ -86,6 +88,7 @@ class FakeOwnTone:
     def play_album(self, path):
         self.calls.append(("play_album", path))
         self.queue = 12
+        self.queue_album = path
         self.player = "play"
 
     def play(self):
@@ -103,6 +106,7 @@ class FakeOwnTone:
     def clear_queue(self):
         self.calls.append(("clear_queue",))
         self.queue = 0
+        self.queue_album = None
         self.player = "stop"
 
     def queue_length(self):
@@ -111,6 +115,9 @@ class FakeOwnTone:
 
     def player_state(self):
         return {"state": self.player}
+
+    def queue_holds_album(self, relative_path):
+        return self.queue > 0 and self.queue_album == relative_path
 
     def finish_album(self):
         """What OwnTone looks like when the last track has played out."""
@@ -1059,19 +1066,34 @@ def test_management_mode_clears_the_error_for_a_known_card(ctx):
     assert controller.last_error is None
 
 
-def test_enabling_management_mode_stops_playback(ctx):
-    # The point is a quiet box to register against; leaving the current album
-    # running would defeat it.
+def test_enabling_management_mode_leaves_playback_alone(ctx):
+    # Management mode governs what a card read *means* -- identification only,
+    # never play, pause or a switch of record. It is not about having a quiet
+    # box to register against, which is why it no longer stops the music.
     controller, owntone, _, _ = ctx
     controller.on_card_present("aaaa")
     assert controller.state is State.PLAYING
+    owntone.calls.clear()
 
     controller.set_management_mode(True)
 
-    assert ("stop",) in owntone.calls
-    assert ("clear_queue",) in owntone.calls
-    assert controller.state is State.IDLE
-    assert controller.now_playing is None
+    assert not any(c[0] in ("stop", "clear_queue", "pause")
+                   for c in owntone.calls)
+    assert controller.state is State.PLAYING
+    assert controller.now_playing is not None
+
+
+def test_leaving_management_mode_does_not_disturb_playback_either(ctx):
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+    controller.set_management_mode(True)
+    owntone.calls.clear()
+
+    controller.set_management_mode(False)
+
+    assert not any(c[0] in ("stop", "clear_queue", "pause")
+                   for c in owntone.calls)
+    assert controller.state is State.PLAYING
 
 
 def test_management_mode_ignores_card_removal(ctx):
@@ -1285,3 +1307,81 @@ def test_no_outputs_selected_falls_through_to_the_snapshot(ctx):
 
     assert owntone.selected_output_ids() == ["1", "2"]
     assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+
+
+# --- restarting the service under a running OwnTone -------------------------
+#
+# OwnTone outlives this service, so a redeploy leaves the record still turning.
+# The controller used to wake with no memory, treat the seated card as new, and
+# clear the queue to start side one again -- which is not what "restart the
+# jukebox service" should mean to someone listening to it.
+
+
+def _restarted(owntone, wall):
+    """A fresh controller over an OwnTone that never stopped."""
+    cards = FakeCards({
+        "aaaa": Card(uid="aaaa", name="Blue", path="Miles Davis/Kind of Blue"),
+        "bbbb": Card(uid="bbbb", name="Rumours", path="Fleetwood Mac/Rumours"),
+    })
+    return Controller(owntone, cards, FakeSnapshot(), Config(grace_period_s=90.0),
+                      clock=FakeClock(), wall_clock=wall)
+
+
+def test_a_restart_adopts_the_album_owntone_is_still_playing(ctx, wall):
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+    assert controller.state is State.PLAYING
+
+    fresh = _restarted(owntone, wall)
+    owntone.calls.clear()
+    fresh.on_card_present("aaaa")           # the card never left the platter
+
+    assert not any(c[0] in ("play_album", "clear_queue", "stop")
+                   for c in owntone.calls), owntone.calls
+    assert fresh.state is State.PLAYING
+    assert fresh.now_playing == "Blue"
+
+
+def test_a_restart_resumes_an_album_owntone_had_paused(ctx, wall):
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+    owntone.pause()
+
+    fresh = _restarted(owntone, wall)
+    owntone.calls.clear()
+    fresh.on_card_present("aaaa")
+
+    assert ("play",) in owntone.calls
+    assert not any(c[0] == "play_album" for c in owntone.calls)
+    assert fresh.state is State.PLAYING
+
+
+def test_a_restart_with_a_different_card_starts_that_album(ctx, wall):
+    """Adoption is only ever for the record actually on the turntable."""
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+
+    fresh = _restarted(owntone, wall)
+    owntone.calls.clear()
+    fresh.on_card_present("bbbb")
+
+    assert ("play_album", "Fleetwood Mac/Rumours") in owntone.calls
+
+
+def test_a_restart_with_nothing_playing_starts_the_album(ctx, wall):
+    controller, owntone, _, _ = ctx
+    fresh = _restarted(owntone, wall)
+    fresh.on_card_present("aaaa")
+    assert ("play_album", "Miles Davis/Kind of Blue") in owntone.calls
+
+
+def test_only_the_first_card_after_a_restart_can_adopt(ctx, wall):
+    """A finished album also leaves no loaded card, and adopting there would
+    resume a record that has already played out."""
+    controller, owntone, _, _ = ctx
+    fresh = _restarted(owntone, wall)
+    fresh.on_card_present("aaaa")            # uses up the one adoption attempt
+    owntone.calls.clear()
+
+    fresh.on_card_present("bbbb")
+    assert ("play_album", "Fleetwood Mac/Rumours") in owntone.calls
