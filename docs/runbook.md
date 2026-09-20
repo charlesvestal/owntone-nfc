@@ -236,6 +236,18 @@ The library is an SMB mount from the UGREEN NAS, mounted read-only at
   rsize=131072,wsize=131072 0 0
 ```
 
+`provision.sh` writes this line for you if you pass the share, and re-running
+it **updates** an existing entry rather than duplicating it - which is how the
+read-size fix reaches a box built before it existed:
+
+```
+sudo NAS_SHARE=//192.168.2.46/Media/music/library bash deploy/provision.sh
+```
+
+Leave `NAS_SHARE` unset and `/etc/fstab` is left entirely alone. The address is
+never committed: it is passed in, because this repo does not carry the home
+network. Credentials are separate and are not written by provisioning.
+
 **By IP, deliberately, not `//vestnas.local/`.** The hostname version worked
 for weeks and then stopped: the NAS began advertising only an IPv6 address
 over mDNS, and the Pi resolves with `mdns4_minimal`, which is IPv4-only. The

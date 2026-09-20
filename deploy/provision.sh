@@ -9,6 +9,13 @@ REPO="${REPO:-/home/pi/owntone-nfc}"
 MUSIC="${MUSIC:-/srv/music}"
 USER_NAME="${USER_NAME:-pi}"
 
+# The NAS is not hardcoded: this repo does not carry the home network. Pass the
+# share to have the mount written for you, e.g.
+#   sudo NAS_SHARE=//10.0.0.5/Media/music/library bash deploy/provision.sh
+# Leave it unset and /etc/fstab is left entirely alone.
+NAS_SHARE="${NAS_SHARE:-}"
+NAS_CREDS="${NAS_CREDS:-/etc/samba/creds/nas}"
+
 say() { printf '\n==> %s\n' "$1"; }
 
 say "Base packages"
@@ -122,6 +129,43 @@ systemctl restart systemd-journald
 # what migrates it. Raspberry Pi OS ships Storage=volatile explicitly, so the
 # drop-in is an override rather than a default being filled in.
 journalctl --flush || true
+
+say "Music mount"
+# rsize is the load-bearing option here, not a tuning nicety. SMB3 defaults to
+# 4MB reads; over Wi-Fi that is roughly a second of airtime delivered as one
+# slug, and AirPlay 2's PTP timing packets queue behind it until a HomePod
+# stereo pair audibly loses sync - a flanging effect that reads as a speaker
+# fault. Measured on the box: 4MB reads put 70 of 80 pings over 200ms with a
+# 4517ms worst case; 128KB reads put zero over 200ms *and* ran faster
+# (2.0 vs 1.6 MB/s). Nothing is traded away. See docs/runbook.md.
+#
+# This lives here rather than only in the runbook because a rebuild onto a
+# fresh SD card would otherwise come back with the 4MB default, and the symptom
+# is audible rather than obvious.
+MOUNT_OPTS="credentials=${NAS_CREDS},uid=${USER_NAME},gid=${USER_NAME}"
+MOUNT_OPTS="${MOUNT_OPTS},file_mode=0444,dir_mode=0555,iocharset=utf8,ro"
+MOUNT_OPTS="${MOUNT_OPTS},nofail,_netdev,x-systemd.automount,x-systemd.idle-timeout=600"
+MOUNT_OPTS="${MOUNT_OPTS},rsize=131072,wsize=131072"
+
+if [ -n "$NAS_SHARE" ]; then
+  cp -n /etc/fstab /etc/fstab.orig 2>/dev/null || true
+  fstab_tmp="$(mktemp)"
+  # Drop any existing entry for this mountpoint before appending, so re-running
+  # on a box that already has the mount UPDATES the options. Without that the
+  # read-size fix would never reach an install that predates it.
+  grep -vE "^[^#]*[[:space:]]${MUSIC}[[:space:]]+cifs([[:space:]]|$)" /etc/fstab       > "$fstab_tmp" || true
+  printf '%s %s cifs %s 0 0
+' "$NAS_SHARE" "$MUSIC" "$MOUNT_OPTS" >> "$fstab_tmp"
+  install -m 0644 "$fstab_tmp" /etc/fstab
+  rm -f "$fstab_tmp"
+  systemctl daemon-reload
+  echo "  /etc/fstab entry for $MUSIC written (original kept at /etc/fstab.orig)"
+  echo "  Credentials are NOT written here - see 'sudo /usr/local/sbin/nas-creds'."
+else
+  echo "  NAS_SHARE unset, leaving /etc/fstab alone."
+  echo "  If $MUSIC is already mounted, confirm it has rsize=131072:"
+  echo "    mount | grep $MUSIC"
+fi
 
 say "Nightly library rescan"
 # A read-only network mount sends no inotify events and cannot carry OwnTone's
