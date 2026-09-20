@@ -1,0 +1,17 @@
+# deploy/owntone-rescan.timer -> /etc/systemd/system/owntone-rescan.timer
+[Unit]
+Description=Nightly OwnTone library rescan
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+# THE POINT OF THIS FILE. The jukebox lives in a room and gets switched off at
+# night, so a plain cron entry at 04:30 simply never fires -- and cron does not
+# catch up, which is why this replaced /etc/cron.d/owntone-rescan. Persistent=
+# runs the job shortly after boot when the scheduled time was missed.
+Persistent=true
+# Spread the post-boot catch-up so a rescan does not fight the Pi's own
+# start-up for the network mount.
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

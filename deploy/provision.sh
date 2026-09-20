@@ -107,7 +107,37 @@ install -m 0644 "$REPO/deploy/dropins/NetworkManager-wait-online-any.conf" \
 install -d /etc/systemd/system/owntone.service.d
 install -m 0644 "$REPO/deploy/dropins/owntone-wait-for-music.conf" \
     /etc/systemd/system/owntone.service.d/mount.conf
+
+# Keep the journal across reboots. Volatile by default, which means every
+# restart erases the evidence -- and the failures on this box are intermittent
+# and get noticed days later. Capped, because an unbounded journal on an SD
+# card is how SD cards die.
+install -d /etc/systemd/journald.conf.d
+install -m 0644 "$REPO/deploy/dropins/journald-persistent.conf" \
+    /etc/systemd/journald.conf.d/persistent.conf
+install -d -m 2755 -o root -g systemd-journal /var/log/journal
 systemctl daemon-reload
+systemctl restart systemd-journald
+# Restarting alone leaves it writing to /run until the next boot; the flush is
+# what migrates it. Raspberry Pi OS ships Storage=volatile explicitly, so the
+# drop-in is an override rather than a default being filled in.
+journalctl --flush || true
+
+say "Nightly library rescan"
+# A read-only network mount sends no inotify events and cannot carry OwnTone's
+# .init-rescan trigger file, so new albums are invisible until it is told.
+#
+# A systemd timer rather than cron, and the reason is Persistent=true: this box
+# is switched off at night, so a 04:30 cron entry never fires and cron does not
+# catch up. The timer runs the missed job shortly after the next boot instead.
+# Found the hard way -- the cron it replaces had never run once.
+install -m 0644 "$REPO/deploy/owntone-rescan.service" \
+    /etc/systemd/system/owntone-rescan.service
+install -m 0644 "$REPO/deploy/owntone-rescan.timer" \
+    /etc/systemd/system/owntone-rescan.timer
+rm -f /etc/cron.d/owntone-rescan
+systemctl daemon-reload
+systemctl enable --now owntone-rescan.timer
 
 say "OwnTone"
 if ! command -v owntone >/dev/null; then

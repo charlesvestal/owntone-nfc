@@ -1,0 +1,15 @@
+# deploy/owntone-rescan.service -> /etc/systemd/system/owntone-rescan.service
+[Unit]
+Description=Tell OwnTone to rescan the music library
+# The scan is pointless before the library is there, and OwnTone has to be up
+# to be asked. Neither is Requires=: a box whose NAS is asleep should skip a
+# rescan quietly, not fail a unit.
+After=network-online.target owntone.service srv-music.mount
+Wants=owntone.service
+
+[Service]
+Type=oneshot
+# The library lives on a read-only network mount, so OwnTone gets no inotify
+# events and cannot be nudged with its own .init-rescan trigger file. The API
+# is the only way to make it notice a new album.
+ExecStart=/usr/bin/curl -fsS -m 30 -X PUT http://127.0.0.1:3689/api/update
