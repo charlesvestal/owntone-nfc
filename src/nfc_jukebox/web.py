@@ -419,11 +419,18 @@ def create_app(config, controller, store, owntone=None, power=None,
         #
         # `known` is None when the library cannot be read; fall back to the
         # manifest then rather than blanking a grid that has real results.
+        # "all" is the reprint view: every album, including ones already done.
+        # Normally the studio is the print queue and shows only what still
+        # needs a card.
+        want_all = request.args.get("all") in ("1", "true", "yes")
         if known is None:
             waiting = sorted(manifest)
+            assigned_paths = set()
         else:
-            waiting = sorted(row["path"] for row in _album_rows()
-                             if not row["assigned"])
+            rows = _album_rows()
+            assigned_paths = {r["path"] for r in rows if r["assigned"]}
+            waiting = sorted(r["path"] for r in rows
+                             if want_all or not r["assigned"])
         albums = []
         for album_path in waiting:
             entry = manifest.get(album_path)
@@ -437,6 +444,7 @@ def create_app(config, controller, store, owntone=None, power=None,
                     "score": None, "verdict": "pending",
                     "why": "not collected yet",
                     "override": overrides.get(album_path), "mtime": None,
+                    "assigned": album_path in assigned_paths,
                 })
                 continue
             verdict, why = classify(entry, 0)
@@ -451,6 +459,7 @@ def create_app(config, controller, store, owntone=None, power=None,
                 "verdict": verdict,
                 "why": why,
                 "override": overrides.get(album_path),
+                "assigned": album_path in assigned_paths,
                 # Versions the image URL. Artwork is replaced in place under a
                 # stable filename, so without this the browser keeps whatever
                 # it cached and a re-pinned cover never appears.
@@ -474,6 +483,11 @@ def create_app(config, controller, store, owntone=None, power=None,
                 targets = [t for t in targets
                            if manifest.get(t, {}).get("status") != "ok"
                            or bool(overrides.get(t)) != bool(manifest.get(t, {}).get("override"))]
+            if not targets:
+                # Nothing to do. Starting a run anyway briefly marks the box
+                # busy and 409s the next request, which is how a "nothing to
+                # collect" click blocked the collect that followed it.
+                return jsonify(started=False, total=0)
             _collect_state.update(running=True, done=0, total=len(targets),
                                   album=None)
         threading.Thread(target=_run_collection, args=(targets,),
@@ -539,10 +553,18 @@ def create_app(config, controller, store, owntone=None, power=None,
         payload = request.get_json(silent=True) or {}
         out_dir = _artwork_dir()
         target = os.path.join(out_dir, "cards-to-print.pdf")
+        # Print exactly what the grid is showing. Left to itself build_sheets
+        # takes the whole manifest, so unticking "include albums that already
+        # have cards" would still print them.
+        known = _known_albums()
+        only = None
+        if not payload.get("all") and known is not None:
+            only = {row["path"] for row in _album_rows() if not row["assigned"]}
         try:
             result = build_sheets(out_dir, target,
                                   int(payload.get("min_px") or 0),
-                                  bool(payload.get("include_suspect")))
+                                  bool(payload.get("include_suspect")),
+                                  only=only)
         except FileNotFoundError:
             return jsonify(error="No artwork collected yet."), 409
         except Exception as exc:                        # noqa: BLE001

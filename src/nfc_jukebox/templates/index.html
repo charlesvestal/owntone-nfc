@@ -127,6 +127,11 @@
 <label><input type="checkbox" id="refetch"> start again from scratch</label>
 <label><input type="checkbox" id="showskipped" onchange="loadArtworkSafely()">
   show skipped</label>
+<label><input type="checkbox" id="includeassigned" onchange="loadArtworkSafely()">
+  include albums that already have cards</label>
+<p class="muted">Tick that to reprint a whole set. Artwork for albums that
+  already have cards has never been collected, so Collect will fetch it
+  first &mdash; and the grid then shows exactly what will print.</p>
 <p id="artmsg" class="muted">&nbsp;</p>
 <div class="bar"><div id="artbar"></div></div>
 <p id="artcount" class="muted">&nbsp;</p>
@@ -514,8 +519,14 @@ function artFigure(a, current) {
   return fig;
 }
 
+function includeAssigned() {
+  const box = document.getElementById('includeassigned');
+  return !!(box && box.checked);
+}
+
 async function loadArtwork() {
-  const body = await (await fetch('/api/artwork/manifest')).json();
+  const body = await (await fetch(
+    '/api/artwork/manifest' + (includeAssigned() ? '?all=1' : ''))).json();
   const grid = document.getElementById('artgrid');
   // Skipped albums are ones you have already decided do not need a card, so
   // they are noise in the grid by default -- but they stay one click away,
@@ -530,7 +541,9 @@ async function loadArtwork() {
   body.albums.forEach(a => counts[a.verdict] = (counts[a.verdict] || 0) + 1);
   const hidden = body.albums.length - shown.length;
   document.getElementById('artcount').textContent = body.albums.length
-    ? `${body.albums.length} album(s) awaiting a card: ` +
+    ? `${body.albums.length} album(s)` +
+      (includeAssigned() ? ' (all, including ones with cards): '
+                         : ' awaiting a card: ') +
       `${(counts.local || 0)} from the library, ` +
       `${(counts.fetched || 0)} fetched, ${(counts.suspect || 0)} to check, ` +
       `${(counts.bad || 0)} unusable, ${(counts.skipped || 0)} skipped, ` +
@@ -591,7 +604,7 @@ async function collect() {
   const refetch = document.getElementById('refetch').checked;
   const r = await fetch('/api/artwork/collect',
     {method: 'POST', headers: {'Content-Type': 'application/json'},
-     body: JSON.stringify({refetch})});
+     body: JSON.stringify({refetch, all: includeAssigned()})});
   const body = await r.json();
   if (!r.ok) { document.getElementById('artmsg').textContent = body.error; return; }
   if (!body.total) {
@@ -646,7 +659,7 @@ async function makeSheets() {
   document.getElementById('artmsg').textContent = 'Building\u2026';
   const r = await fetch('/api/artwork/sheets',
     {method: 'POST', headers: {'Content-Type': 'application/json'},
-     body: JSON.stringify({})});
+     body: JSON.stringify({all: includeAssigned()})});
   const body = await r.json();
   if (!r.ok) { document.getElementById('artmsg').textContent = body.error; return; }
   const msg = document.getElementById('artmsg');
