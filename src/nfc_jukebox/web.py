@@ -94,6 +94,14 @@ def create_app(config, controller, store, owntone=None, power=None,
         return render_template("index.html",
                                owntone_port=urlparse(config.owntone_url).port or 3689)
 
+    # Both /api/status and /api/cards are polled once a second by the page,
+    # and both land here, so this ran twice a second for as long as a tab
+    # stayed open -- an os.listdir on the CIFS mount, ~6 SMB round trips a
+    # call. Cached briefly rather than skipped: a NAS that drops still has to
+    # surface on the page, and this TTL is the worst-case delay before it does.
+    _mount_cache: dict = {"at": 0.0, "value": None}
+    _MOUNT_TTL_S = 15.0
+
     def library_state():
         """Whether the music is actually reachable, as (ok, explanation).
 
@@ -106,16 +114,28 @@ def create_app(config, controller, store, owntone=None, power=None,
         the NAS stopped resolving. Catching only the tidy exception would have
         taken down the very page meant to report the problem.
         """
+        now = time.monotonic()
+        if (_mount_cache["value"] is not None
+                and now - _mount_cache["at"] < _MOUNT_TTL_S):
+            return _mount_cache["value"]
         root = str(config.library_root)
         try:
             entries = os.listdir(root)
         except OSError as exc:
-            return False, f"Music is not mounted at {root} ({exc.strerror})"
-        if not entries:
-            # An automount point with nothing under it is indistinguishable
-            # from a mount that failed, because that is what it is.
-            return False, f"Music is not mounted at {root} (nothing there)"
-        return True, None
+            result = (False,
+                      f"Music is not mounted at {root} ({exc.strerror})")
+        else:
+            if not entries:
+                # An automount point with nothing under it is
+                # indistinguishable from a mount that failed, because that is
+                # what it is.
+                result = (False,
+                          f"Music is not mounted at {root} (nothing there)")
+            else:
+                result = (True, None)
+        _mount_cache["at"] = now
+        _mount_cache["value"] = result
+        return result
 
     # Cached like the outputs, and for a sharper reason: during a rescan
     # OwnTone's /api/library was measured taking 13 seconds to answer on the
@@ -291,11 +311,15 @@ def create_app(config, controller, store, owntone=None, power=None,
 
 
     # The library is a network mount: 185 albums over CIFS measured 7.3s to
-    # walk. /api/cards and /api/albums are polled once a second by the page,
-    # so this must not be repeated per request. Albums appear when someone
-    # copies files to a NAS, which is not a once-a-second event.
+    # walk, and one cold walk measured ~650 SMB round trips on the box.
+    # /api/cards and /api/albums are polled once a second by the page, so this
+    # must not be repeated per request. Albums appear when someone copies
+    # files to a NAS, which is not a once-a-second event -- at the old 15s
+    # this was still four full walks a minute for a tab nobody was looking at.
+    # The Register tab reloads the list after saving a card, so the delay is
+    # not felt where it would matter.
     _albums_cache: dict = {"at": 0.0, "value": None}
-    _ALBUMS_TTL_S = 15.0
+    _ALBUMS_TTL_S = 300.0
 
     def _album_rows():
         """Every album in the library, and whether it already has a card.

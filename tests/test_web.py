@@ -1282,3 +1282,106 @@ def test_a_posted_scan_does_not_touch_playback(app_ctx):
     client.post("/api/scan", json={"uid": "aa"})
     assert controller.state is State.PLAYING
     assert controller.now_playing == "Rumours"
+
+
+# --- the cost of a page left open -------------------------------------------
+#
+# An admin page forgotten in a browser tab was measured driving ~650 SMB round
+# trips every 15s plus ~6 more twice a second, continuously, for 17 hours --
+# on the same 2.4GHz radio the AirPlay stream needs. Both polled endpoints
+# reach the network mount: /api/status and /api/cards each call library_state()
+# (an uncached os.listdir), and /api/cards also pulls in the full walk.
+
+
+def _count_listdir(monkeypatch):
+    """Count os.listdir calls against the library root."""
+    import nfc_jukebox.web as web_module
+    calls = []
+    real = web_module.os.listdir
+
+    def counting(path):
+        calls.append(path)
+        return real(path)
+
+    monkeypatch.setattr(web_module.os, "listdir", counting)
+    return calls
+
+
+def test_the_mount_check_is_not_a_listdir_on_every_status_poll(app_ctx,
+                                                               monkeypatch):
+    """/api/status is polled once a second forever. library_state() listdirs
+    the CIFS mount, which measured ~6 SMB round trips a call on the box."""
+    client, _, _ = app_ctx
+    calls = _count_listdir(monkeypatch)
+    for _ in range(10):
+        client.get("/api/status")
+    assert len(calls) <= 1, f"listdir'd the mount {len(calls)} times"
+
+
+def test_the_mount_check_is_not_a_listdir_on_every_cards_poll(app_ctx,
+                                                              monkeypatch):
+    """/api/cards is polled once a second too, and reaches library_state()
+    through _known_albums()."""
+    client, _, _ = app_ctx
+    calls = _count_listdir(monkeypatch)
+    for _ in range(10):
+        client.get("/api/cards")
+    assert len(calls) <= 1, f"listdir'd the mount {len(calls)} times"
+
+
+def test_the_library_walk_outlives_a_minute_of_polling(app_ctx, monkeypatch):
+    """Albums appear when someone copies files to a NAS. A 15s TTL meant four
+    full walks a minute for a page nobody was looking at."""
+    import nfc_jukebox.web as web_module
+    client, _, _ = app_ctx
+
+    walks = []
+    real_glob = web_module.Path.glob
+
+    def counting_glob(self, pattern):
+        walks.append(pattern)
+        return real_glob(self, pattern)
+
+    monkeypatch.setattr(web_module.Path, "glob", counting_glob)
+    client.get("/api/cards")
+
+    real_monotonic = time.monotonic
+    monkeypatch.setattr(web_module.time, "monotonic",
+                        lambda: real_monotonic() + 60)
+    client.get("/api/cards")
+    assert len(walks) <= 1, f"walked the library {len(walks)} times in a minute"
+
+
+def test_an_outage_still_surfaces_once_the_mount_check_expires(app_ctx,
+                                                               monkeypatch):
+    """Caching the check must not mask a NAS that has actually gone away --
+    the page explaining itself is the whole reason the check exists."""
+    import nfc_jukebox.web as web_module
+    client, _, _ = app_ctx
+    assert client.get("/api/status").get_json()["library_ok"] is True
+
+    def gone(path):
+        raise OSError(19, "No such device")
+
+    monkeypatch.setattr(web_module.os, "listdir", gone)
+    real_monotonic = time.monotonic
+    monkeypatch.setattr(web_module.time, "monotonic",
+                        lambda: real_monotonic() + 3600)
+
+    body = client.get("/api/status").get_json()
+    assert body["library_ok"] is False
+    assert "No such device" in body["library_error"]
+
+
+def test_the_page_stops_polling_when_nobody_is_looking(app_ctx):
+    """There is no JS harness here, so this guards the shape of the fix only.
+
+    It is worth guarding even so: the failure it prevents is silent from the
+    page and silent from the box, and went seventeen hours unnoticed. An
+    unconditional setInterval is what regressing looks like.
+    """
+    client, _, _ = app_ctx
+    page = client.get("/").get_data(as_text=True)
+    assert "visibilitychange" in page
+    assert "clearInterval" in page
+    assert "tick(); setInterval(tick, 1000);" not in page

@@ -449,7 +449,25 @@ async function del(uid) {
   refresh();
 }
 document.getElementById('save').addEventListener('click', save);
-loadAlbums(); tick(); setInterval(tick, 1000);
+// A tab left open in the background polled on forever. Every tick is two
+// requests that reach the NAS over SMB -- /api/status and /api/cards both
+// check the mount, and /api/cards pulls in the album walk -- on the same
+// 2.4GHz radio the AirPlay stream needs. One forgotten tab on a desktop was
+// measured driving hundreds of thousands of SMB round trips overnight, which
+// is invisible from the page and invisible from the box. A page nobody is
+// looking at should cost nothing, so polling follows visibility.
+let ticker = null, albumsLoaded = false;
+function startPolling() {
+  if (!albumsLoaded) { albumsLoaded = true; loadAlbums(); }
+  if (ticker === null) { tick(); ticker = setInterval(tick, 1000); }
+}
+function stopPolling() {
+  if (ticker !== null) { clearInterval(ticker); ticker = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopPolling(); else startPolling();
+});
+if (!document.hidden) startPolling();
 // --- tabs --------------------------------------------------------------
 // Which panel is showing is kept in the URL hash, so a reload lands you back
 // where you were rather than on "Now playing" every time.
