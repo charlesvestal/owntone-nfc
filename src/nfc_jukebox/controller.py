@@ -28,6 +28,8 @@ import time
 from contextlib import contextmanager
 from typing import Callable, Iterator
 
+from .cards import normalise_uid
+
 log = logging.getLogger(__name__)
 
 # How often, while an album is playing, to ask OwnTone whether the outputs we
@@ -199,8 +201,7 @@ class Controller:
         # Management mode short-circuits here: after recording the UID, so the
         # card is still learnable, but before anything reaches OwnTone.
         if self.management_mode:
-            card = self._cards.get(uid)
-            self.last_error = None if card else f"Unknown card {uid}"
+            self._note_identified(uid)
             return
 
         # A still-seated card re-announced by the reader. Restarting the album
@@ -370,6 +371,24 @@ class Controller:
         self.last_error = None
         log.info("Adopted the album already playing: %s", card.name)
         return True
+
+    def note_scan(self, uid: str) -> None:
+        """Record a card seen by some reader other than the jukebox's own.
+
+        Identification only: it never starts, stops or switches a record, so a
+        scan at a desk cannot interrupt what is playing in the room. That is
+        the same contract management mode gives a tap on the box itself, which
+        is why both go through here.
+        """
+        with self._lock:
+            self._note_identified(normalise_uid(uid))
+
+    def _note_identified(self, uid: str) -> None:
+        """Remember a card for registration, and say whether we know it."""
+        self.last_seen_uid = uid
+        self.last_seen_at = self._clock()
+        card = self._cards.get(uid)
+        self.last_error = None if card else f"Unknown card {uid}"
 
     def set_management_mode(self, enabled: bool) -> None:
         """Turn card-identification-only mode on or off.

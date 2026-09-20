@@ -1248,3 +1248,37 @@ def test_sheets_only_print_the_albums_on_screen(tmp_path):
         assert calls["only"] is None
     finally:
         cardart.build_sheets = original
+
+
+# --- scans posted from a desk reader ----------------------------------------
+
+
+def test_a_posted_scan_shows_up_as_the_last_seen_card(app_ctx):
+    client, controller, _ = app_ctx
+    body = client.post("/api/scan", json={"uid": "AB:CD:EF:01"}).get_json()
+    assert body["uid"] == "abcdef01"
+    assert controller.last_seen_uid == "abcdef01"
+    assert client.get("/api/status").get_json()["last_seen_uid"] == "abcdef01"
+
+
+def test_a_posted_scan_says_whether_the_card_is_known(app_ctx):
+    client, _, store = app_ctx
+    store.save({"aa": Card(uid="aa", name="Kind of Blue",
+                           path="Miles Davis/Kind of Blue")})
+    assert client.post("/api/scan", json={"uid": "aa"}).get_json()["known"] is True
+    assert client.post("/api/scan", json={"uid": "bb"}).get_json()["known"] is False
+
+
+def test_a_scan_without_a_uid_is_a_400(app_ctx):
+    client, _, _ = app_ctx
+    assert client.post("/api/scan", json={}).status_code == 400
+
+
+def test_a_posted_scan_does_not_touch_playback(app_ctx):
+    """A tap at a desk must never interrupt the record in the room."""
+    client, controller, _ = app_ctx
+    controller.state = State.PLAYING
+    controller.now_playing = "Rumours"
+    client.post("/api/scan", json={"uid": "aa"})
+    assert controller.state is State.PLAYING
+    assert controller.now_playing == "Rumours"
