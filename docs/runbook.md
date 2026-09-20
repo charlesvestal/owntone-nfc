@@ -8,7 +8,7 @@ what you want when something is broken or you are rebuilding.
 
 | | |
 |---|---|
-| Host | `jukebox.local` (Wi-Fi 2.4 GHz `tincanphoney24`, DHCP) |
+| Host | `jukebox.local` (Wi-Fi 2.4 GHz `<2.4GHz-SSID>`, DHCP) |
 | Admin page | http://jukebox.local:8080 — card registration only |
 | OwnTone | http://jukebox.local:3689 — player, volume, speakers, library |
 | Music | `/srv/music/<Artist>/<Album>/` — Samba share `smb://jukebox.local` (guest) |
@@ -91,15 +91,15 @@ unauthenticated `/info` probe even over loopback.
 ## Wi-Fi: use the 2.4 GHz SSID, not 5 GHz
 
 **This board's 5 GHz path fails in the jukebox's normal position, and 2.4 GHz
-works. Configure `tincanphoney24`.** Everything below is the evidence, because
+works. Configure `<2.4GHz-SSID>`.** Everything below is the evidence, because
 two earlier outages were blamed on the wrong thing.
 
 Measured 2026-09-19, same board, same spot, minutes apart:
 
 | Band | SSID | Channel | Signal | DHCP | Rate |
 |---|---|---|---|---|---|
-| 5 GHz | `tincanphoney` | 36 (non-DFS) | -69 dBm | **never completes** | - |
-| 2.4 GHz | `tincanphoney24` | 11 | **-58 dBm** | instant | 130 Mbit/s |
+| 5 GHz | `<5GHz-SSID>` | 36 (non-DFS) | -69 dBm | **never completes** | - |
+| 2.4 GHz | `<2.4GHz-SSID>` | 11 | **-58 dBm** | instant | 130 Mbit/s |
 
 Eleven dB, and the difference between working and not. 2.4 GHz penetrates; the
 box sits where it sits.
@@ -127,11 +127,11 @@ certainly a few dB gained from moving the box, not the channel.
 **Not a 2.4 GHz radio fault.** This runbook previously stated the board sees
 zero 2.4 GHz networks, ever, and fails even a directed probe. That is no longer
 true - after the 2026-09-15 rebuild onto Trixie (kernel 6.18.50) a scan shows
-five 2.4 GHz networks, `tincanphoney24` among them at the strongest signal of
+five 2.4 GHz networks, `<2.4GHz-SSID>` among them at the strongest signal of
 any AP the board can see. If the fault was ever real, the newer firmware fixed
 it. Note also that the two bands are *separate SSIDs* here, so the old
 "forcing the 2.4 GHz band didn't work" test proved nothing: it was forcing a
-profile for `tincanphoney`, which does not exist on 2.4.
+profile for `<5GHz-SSID>`, which does not exist on 2.4.
 
 **Not the enclosure.** The box ran for months in that same enclosure in that
 same spot, and 2.4 GHz works fine inside it today. The enclosure does not
@@ -154,8 +154,8 @@ As left on 2026-09-19:
 
 | Profile | Band | Autoconnect | Priority | Powersave |
 |---|---|---|---|---|
-| `tincanphoney24` | 2.4 GHz | yes | 10 | off |
-| `tincanphoney` | 5 GHz | **no** | 0 | off |
+| `<2.4GHz-SSID>` | 2.4 GHz | yes | 10 | off |
+| `<5GHz-SSID>` | 5 GHz | **no** | 0 | off |
 
 The 5 GHz profile is deliberately `autoconnect no`. Left enabled it grabs
 `wlan0` at boot, spends 45 seconds failing DHCP, and can wedge the box off the
@@ -184,7 +184,7 @@ the subnet and grep the ARP table for this Pi 4's OUI, `e4:5f:01` - absent
 means it never got a DHCP lease, so the problem is the radio, not the name.
 
 The router lists several stale `jukebox*` entries, all offline: `.188`
-(`E4:5F:01:91:CE:ED`, wlan0) and `.189` (`E4:5F:01:91:CE:EC`, eth0) are this Pi
+(`<pi-wlan0-mac>`, wlan0) and `.189` (`<pi-eth0-mac>`, eth0) are this Pi
 4; `.224` and `.225` are `B8:27:EB:...`, earlier boards. The `-1/-2/-3` suffixes
 are the Speedport disambiguating different MACs that all announced the hostname
 `jukebox`. Not a name conflict on the Pi, and not a fault.
@@ -194,7 +194,7 @@ are the Speedport disambiguating different MACs that all announced the hostname
 | Symptom | Cause | Fix |
 |---|---|---|
 | Box invisible on the network after a reboot | Wi-Fi power save | See above. Check `iw wlan0 link` — rx bitrate at 6 Mbit/s is the tell. |
-| Box invisible and `jukebox.local` does not resolve | Usually no Wi-Fi profile, or `wlan0` on 5 GHz | First: `nmcli con show` — if there is no Wi-Fi connection, that is the whole answer. Confirm the box is absent rather than merely unnamed by ping-sweeping the subnet and grepping the ARP table for `e4:5f:01`; no entry means it never got a DHCP lease, so it is not mDNS. Then check it is on `tincanphoney24`, not `tincanphoney`. |
+| Box invisible and `jukebox.local` does not resolve | Usually no Wi-Fi profile, or `wlan0` on 5 GHz | First: `nmcli con show` — if there is no Wi-Fi connection, that is the whole answer. Confirm the box is absent rather than merely unnamed by ping-sweeping the subnet and grepping the ARP table for `e4:5f:01`; no entry means it never got a DHCP lease, so it is not mDNS. Then check it is on `<2.4GHz-SSID>`, not `<5GHz-SSID>`. |
 | Reader stops responding; log shows `ETIMEDOUT` repeatedly | PN532 wedged out of frame sync, usually by a service restart killing it mid-transaction | Automatic: the reader pulses RSTPDN on GPIO20 after 2 failures and recovers in ~4s. If it does not, check the RSTPDN↔D20 jumper. Manual: `pinctrl set 20 op dl; sleep 1; pinctrl set 20 op dh` |
 | A card plays nothing; status flaps play/pause | Card technology with unstable presence — 4-byte Mifare-style cards report present for ~8ms at a time | Already handled by `presence_debounce_s` (0.5s). If a new card still flaps, raise it. |
 | An album plays shuffled or not from track 1 | Shuffle enabled in OwnTone's UI | The controller forces shuffle/repeat off per card. If it persists, check the log for an error on that call. |
