@@ -1021,3 +1021,56 @@ def test_a_slow_library_answer_leaves_the_last_one_on_screen(app_ctx, monkeypatc
     monkeypatch.setattr(web_module.time, "monotonic",
                         lambda: real_monotonic() + 3600)
     assert client.get("/api/status").get_json()["library"]["albums"] == 168
+
+
+# --- the page's JavaScript ---------------------------------------------------
+#
+# Nothing in this suite executes the template, so a syntax error in it ships
+# silently and takes the whole page with it -- every handler, including the tab
+# buttons, because one bad token stops the entire script parsing. That has
+# happened twice: a chained Node.append().lastChild, and a `const` declared
+# twice in one scope. Both were one `node --check` away from being caught.
+
+
+def _page_script():
+    """The contents of the template's <script> block."""
+    import re
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1]
+            / "src/nfc_jukebox/templates/index.html").read_text()
+    blocks = re.findall(r"<script>(.*?)</script>", html, re.S)
+    assert blocks, "no <script> block in the template"
+    return "\n".join(blocks)
+
+
+def test_the_page_javascript_parses():
+    """Syntax only -- it cannot catch a wrong id, but it catches the class of
+    error that silently disables the entire page."""
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not installed; cannot syntax-check the page script")
+
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
+        handle.write(_page_script())
+        path = handle.name
+    result = subprocess.run([node, "--check", path],
+                            capture_output=True, text=True)
+    os.unlink(path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_every_element_the_script_looks_up_exists_in_the_markup():
+    """getElementById('typo') returns null and usually throws at the first
+    property access, which is the other way this page breaks."""
+    import re
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1]
+            / "src/nfc_jukebox/templates/index.html").read_text()
+    wanted = set(re.findall(r"getElementById\(['\"]([\w-]+)['\"]\)", html))
+    present = set(re.findall(r"""\bid=["']([\w-]+)["']""", html))
+    missing = sorted(wanted - present)
+    assert not missing, f"script looks up ids that do not exist: {missing}"
