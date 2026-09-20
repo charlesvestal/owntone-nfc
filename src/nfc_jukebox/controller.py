@@ -415,10 +415,17 @@ class Controller:
             return
         if self.state is not State.PLAYING:
             return
-        with self._guarded("pausing"):
-            self._owntone.pause()
-        # PAUSED regardless: the card is off the platter, and if the pause did
-        # not land the grace timer will still stop and release the outputs.
+        # PLAYING does not mean something is playing. `_check_finished` leaves
+        # the state alone when the side runs out - that is what keeps a
+        # re-announced card a no-op - and forgets the loaded record instead.
+        # Pausing an OwnTone whose queue has emptied earns a 500, which turns
+        # the ordinary end of a record into a red error on the admin page.
+        if self._loaded_uid is not None:
+            with self._guarded("pausing"):
+                self._owntone.pause()
+        # PAUSED regardless: the card is off the platter, and whether the pause
+        # failed or there was simply nothing to pause, the grace timer still
+        # has to stop and release the outputs.
         self._paused_at = self._clock()
         self.state = State.PAUSED
 

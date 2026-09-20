@@ -1433,3 +1433,47 @@ def test_a_noted_scan_is_normalised(ctx):
     controller, _, _, _ = ctx
     controller.note_scan("AA:AA")
     assert controller.last_seen_uid == "aaaa"
+
+
+def test_lifting_the_card_after_the_side_ran_out_does_not_pause(ctx):
+    """OwnTone answers 500 to a pause when there is nothing to pause.
+
+    `_check_finished` leaves `state` PLAYING on purpose when the side runs
+    out - that is what keeps a re-announced card a no-op - and only forgets
+    the loaded record. Lifting the card then paused a player that had already
+    stopped, and OwnTone rejects that with a 500. Seen twice on the box:
+
+        web: Error pausing playback.
+        web: JSON api request failed with error code 500 (/api/player/pause)
+
+    The cost is not the failed call, which is caught. It is that the end of a
+    record puts a red error on the admin page, and leaves the controller
+    believing it paused something.
+    """
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    owntone.finish_album()
+    clock.advance(30.0)
+    controller.tick()
+    owntone.calls.clear()
+
+    controller.on_card_removed()
+
+    assert ("pause",) not in owntone.calls, \
+        "paused a player that had already stopped"
+    assert controller.last_error is None, \
+        "the end of a record is not an error worth showing"
+    # The speakers must still be let go on the usual grace timer.
+    assert controller.state is State.PAUSED
+
+
+def test_lifting_the_card_mid_record_still_pauses(ctx):
+    """The guard above must not cost the ordinary lift its pause."""
+    controller, owntone, _, clock = ctx
+    controller.on_card_present("aaaa")
+    owntone.calls.clear()
+
+    controller.on_card_removed()
+
+    assert ("pause",) in owntone.calls
+    assert controller.state is State.PAUSED
