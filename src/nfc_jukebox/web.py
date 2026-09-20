@@ -117,6 +117,36 @@ def create_app(config, controller, store, owntone=None, power=None,
             return False, f"Music is not mounted at {root} (nothing there)"
         return True, None
 
+    # Cached like the outputs, and for a sharper reason: during a rescan
+    # OwnTone's /api/library was measured taking 13 seconds to answer on the
+    # box, and this sits on the status line the page polls once a second.
+    _library_cache: dict = {"at": 0.0, "value": None}
+    _LIBRARY_TTL_S = 3.0
+
+    def _library_counts():
+        """What OwnTone knows about, or None if it has never said.
+
+        Never allowed to raise, and never allowed to blank out a good answer:
+        this is the status line, and it has to keep working -- and keep
+        reading sensibly -- while OwnTone is busy scanning.
+        """
+        if owntone is None:
+            return None
+        now = time.monotonic()
+        if (_library_cache["value"] is not None
+                and now - _library_cache["at"] < _LIBRARY_TTL_S):
+            return _library_cache["value"]
+        try:
+            body = owntone.library_status()
+        except Exception:                                   # noqa: BLE001
+            log.debug("Could not read the library status", exc_info=True)
+            return _library_cache["value"]
+        _library_cache["at"] = now
+        _library_cache["value"] = {
+            "songs": body.get("songs"), "albums": body.get("albums"),
+            "updating": bool(body.get("updating"))}
+        return _library_cache["value"]
+
     @app.get("/api/status")
     def status():
         # Resolve the last scanned card here rather than in the controller:
@@ -135,10 +165,28 @@ def create_app(config, controller, store, owntone=None, power=None,
             last_seen_name=card.name if card else None,
             last_seen_path=card.path if card else None,
             management_mode=controller.management_mode,
+            library=_library_counts(),
             outputs=selected_outputs(),
             library_ok=library_ok,
             library_error=library_error,
         )
+
+    @app.post("/api/library/rescan")
+    def library_rescan():
+        """Make OwnTone notice albums added since it last looked.
+
+        The nightly cron only fires if the box happens to be powered on at
+        04:30, which a living-room jukebox often is not, so this is the
+        button that actually gets used.
+        """
+        if owntone is None:
+            return jsonify(error="No OwnTone client."), 503
+        try:
+            owntone.update_library()
+        except Exception as exc:                            # noqa: BLE001
+            log.exception("Asking OwnTone to rescan failed")
+            return jsonify(error=f"Could not reach OwnTone: {exc}"), 502
+        return jsonify(started=True)
 
     @app.put("/api/management")
     def management():
@@ -235,6 +283,19 @@ def create_app(config, controller, store, owntone=None, power=None,
                  "assigned": path in assigned,
                  "card_name": assigned.get(path)} for path in found]
 
+    def _known_albums():
+        """Album paths that exist right now, or None if we cannot tell.
+
+        None is not an empty set. An unmounted library lists nothing, which is
+        indistinguishable from every album having been deleted at once -- and
+        acting on that would prune the whole manifest and flag every card as
+        broken the first time the NAS drops.
+        """
+        ok, _ = library_state()
+        if not ok:
+            return None
+        return {row["path"] for row in _album_rows()}
+
     # --- artwork studio ---------------------------------------------------
     #
     # Collecting artwork, judging what came back, pinning the ones a search got
@@ -302,6 +363,26 @@ def create_app(config, controller, store, owntone=None, power=None,
         out_dir = _artwork_dir()
         manifest = cardart_collect.load_manifest(out_dir)
         overrides = cardart_collect.load_overrides(out_dir)
+
+        # Drop albums whose folder has gone, so a deleted folder does not
+        # leave a ghost tile in the grid for ever. The override survives: it
+        # is a human judgement, and the folder may come back renamed.
+        # Never while a collection is in flight: that thread saves the
+        # manifest after every album, and this read-modify-write would drop
+        # whatever it wrote in between. The stale rows keep until it finishes.
+        known = None if _collect_state["running"] else _known_albums()
+        if known is not None:
+            stale = [path for path in manifest if path not in known]
+            for path in stale:
+                name = manifest.pop(path).get("file")
+                if name:
+                    try:
+                        os.unlink(os.path.join(out_dir, name))
+                    except OSError:
+                        pass          # already gone, or never written
+            if stale:
+                cardart_collect.save_manifest(out_dir, manifest)
+
         albums = []
         for album_path, entry in sorted(manifest.items()):
             verdict, why = classify(entry, 0)
@@ -464,9 +545,13 @@ def create_app(config, controller, store, owntone=None, power=None,
         # so it costs one pass, and the page stays a renderer.
         cards = store.load()
         duplicated = duplicate_paths(cards)
+        # None means the library is unreachable, so nothing can be judged
+        # missing -- see _known_albums.
+        known = _known_albums()
         return jsonify(cards=[
             {"uid": c.uid, "name": c.name, "path": c.path,
-             "duplicate": c.path in duplicated}
+             "duplicate": c.path in duplicated,
+             "orphan": known is not None and c.path not in known}
             for c in cards.values()
         ])
 
