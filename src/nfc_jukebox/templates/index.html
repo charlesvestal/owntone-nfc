@@ -16,6 +16,8 @@
      merely tinted: colour alone would not survive a glance down 130 rows. */
   tr.dup td { background: #fff4f4; }
   tr.dup td:first-child::before { content: '\26A0\FE0E'; margin-right: .4rem; }
+  tr.orphan td { background: #fffaf0; }
+  tr.orphan td:first-child::after { content: ' \2014 album is gone'; color: #b00; }
   #dupwarn { color: #b00; font-weight: 600; }
   #dupwarn[hidden] { display: none; }
   .warn { background:#fdf0ef; border-left:4px solid #c9584f;
@@ -114,6 +116,8 @@
 <button id="collect" onclick="collect()">Collect artwork</button>
 <button id="sheets" onclick="makeSheets()">Make print sheets</button>
 <label><input type="checkbox" id="refetch"> start again from scratch</label>
+<label><input type="checkbox" id="showskipped" onchange="loadArtworkSafely()">
+  show skipped</label>
 <p id="artmsg" class="muted">&nbsp;</p>
 <div class="bar"><div id="artbar"></div></div>
 <p id="artcount" class="muted">&nbsp;</p>
@@ -126,6 +130,13 @@
 <button id="poweroff" onclick="power('poweroff')">Shut down</button>
 <button id="reboot" onclick="power('reboot')">Restart</button>
 <p id="powermsg" class="muted">&nbsp;</p>
+
+<h2>Music library</h2>
+<p class="muted">The library is a read-only network mount, so OwnTone gets no
+  notification when an album is added and will not find it on its own. The
+  nightly rescan at 04:30 only runs if the box happens to be switched on then.</p>
+<button id="rescan" onclick="rescan()">Rescan library</button>
+<p id="libmsg" class="muted">&nbsp;</p>
 
 </section>
 
@@ -159,7 +170,11 @@ function el(tag, text) {
 }
 function cardRow(card) {
   const tr = el('tr');
-  if (card.duplicate) tr.className = 'dup';
+  // Both are registration problems worth seeing, and a card can be either.
+  const flags = [];
+  if (card.duplicate) flags.push('dup');
+  if (card.orphan) flags.push('orphan');
+  tr.className = flags.join(' ');
   tr.append(el('td', card.name), el('td', card.path), el('td', card.uid));
   const button = el('button', 'Delete');
   button.addEventListener('click', () => del(card.uid));
@@ -173,6 +188,18 @@ async function refresh() {
   document.getElementById('status').textContent =
     `${s.state}${s.now_playing ? ' \u2014 ' + s.now_playing : ''}` +
     (s.last_error ? ` \u00b7 ${s.last_error}` : '');
+
+  // Only ever written while the System tab can show it, so a scan started
+  // here reports itself finishing without the page having to poll separately.
+  const lib = document.getElementById('libmsg');
+  if (lib && s.library) {
+    if (s.library.updating) {
+      lib.textContent = 'Scanning\u2026';
+    } else if (lib.textContent.startsWith('Scanning\u2026')) {
+      lib.textContent = `Done. ${s.library.albums} albums, `
+                      + `${s.library.songs} songs.`;
+    }
+  }
 
   // The music not being mounted is not an ordinary error - nothing will play
   // at all, and the cause is off the box entirely. It gets its own banner
@@ -239,11 +266,17 @@ async function refresh() {
     document.getElementById('cards').replaceChildren(...c.cards.map(cardRow));
     // Count albums, not cards: three cards on one record is one mistake.
     const albums = new Set(c.cards.filter(x => x.duplicate).map(x => x.path));
-    const warn = document.getElementById('dupwarn');
-    warn.hidden = albums.size === 0;
-    warn.textContent = albums.size === 1
+    const orphans = c.cards.filter(x => x.orphan).length;
+    const parts = [];
+    if (albums.size) parts.push(albums.size === 1
       ? '1 album has more than one card.'
-      : albums.size + ' albums have more than one card.';
+      : albums.size + ' albums have more than one card.');
+    if (orphans) parts.push(orphans === 1
+      ? '1 card points at an album that no longer exists.'
+      : orphans + ' cards point at albums that no longer exist.');
+    const warn = document.getElementById('dupwarn');
+    warn.hidden = parts.length === 0;
+    warn.textContent = parts.join(' ');
   }
 }
 
@@ -474,14 +507,23 @@ function artFigure(a) {
 async function loadArtwork() {
   const body = await (await fetch('/api/artwork/manifest')).json();
   const grid = document.getElementById('artgrid');
-  grid.replaceChildren(...body.albums.map(artFigure));
+  // Skipped albums are ones you have already decided do not need a card, so
+  // they are noise in the grid by default -- but they stay one click away,
+  // because a skip is reversible and easy to regret.
+  const showSkipped = document.getElementById('showskipped').checked;
+  const shown = showSkipped
+    ? body.albums
+    : body.albums.filter(a => a.verdict !== 'skipped');
+  grid.replaceChildren(...shown.map(artFigure));
 
   const counts = {};
   body.albums.forEach(a => counts[a.verdict] = (counts[a.verdict] || 0) + 1);
+  const hidden = body.albums.length - shown.length;
   document.getElementById('artcount').textContent = body.albums.length
     ? `${body.albums.length} album(s): ${(counts.local || 0)} from the library, ` +
       `${(counts.fetched || 0)} fetched, ${(counts.suspect || 0)} to check, ` +
-      `${(counts.bad || 0)} unusable, ${(counts.skipped || 0)} skipped`
+      `${(counts.bad || 0)} unusable, ${(counts.skipped || 0)} skipped` +
+      (hidden ? ` \u2014 ${hidden} hidden` : '')
     : 'Nothing collected yet.';
 
   const bar = document.getElementById('artbar');
@@ -502,6 +544,25 @@ async function loadArtwork() {
 // said -- no grid, no error, and the poll loop dead. That is how one album
 // with no artwork made the whole tab look hung. Report it and let the loop
 // carry on, the same way refresh() does for the play panel.
+async function rescan() {
+  const msg = document.getElementById('libmsg');
+  const button = document.getElementById('rescan');
+  button.disabled = true;
+  msg.textContent = 'Asking OwnTone to rescan\u2026';
+  try {
+    const r = await fetch('/api/library/rescan', {method: 'POST'});
+    const body = await r.json().catch(() => ({}));
+    msg.textContent = r.ok
+      ? 'Scanning. New albums appear as it works \u2014 it stats every file '
+        + 'over the network, so give it a minute.'
+      : (body.error || 'Could not start a rescan.');
+  } catch (err) {
+    msg.textContent = 'Could not start a rescan: ' + err;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadArtworkSafely() {
   try {
     await loadArtwork();

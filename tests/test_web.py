@@ -495,6 +495,12 @@ def _studio(tmp_path, collector=None, manifest=None):
     art = tmp_path / "art"
     art.mkdir()
     if manifest is not None:
+        # Give every album in the manifest a real folder unless the test is
+        # deliberately testing a deleted one: the manifest is pruned of albums
+        # that no longer exist, so a row with no folder vanishes.
+        for album in manifest:
+            if not album.startswith("Gone/"):
+                (tmp_path / album).mkdir(parents=True, exist_ok=True)
         (art / "manifest.json").write_text(json.dumps(manifest))
     config = Config(library_root=tmp_path, cards_file=tmp_path / "cards.yaml",
                     artwork_dir=art)
@@ -688,6 +694,9 @@ def test_both_cards_on_one_album_are_flagged_as_duplicates(app_ctx):
 @pytest.fixture
 def art_ctx(tmp_path):
     """An app whose artwork directory is a real directory we can write."""
+    # The album has to exist on disk: the manifest is pruned of albums whose
+    # folder has gone, so a fixture without one collects nothing.
+    (tmp_path / "Miles Davis" / "Kind of Blue").mkdir(parents=True)
     art = tmp_path / "artwork"
     art.mkdir()
     config = Config(library_root=tmp_path, cards_file=tmp_path / "cards.yaml",
@@ -804,3 +813,211 @@ def test_an_override_during_a_running_collection_does_not_write_the_manifest(tmp
                       json={"album": "A/B", "url": "http://x"}).get_json()
     assert body["collected"] is False
     assert not (art / "manifest.json").exists()
+
+
+# --- albums that no longer exist -------------------------------------------
+#
+# The manifest keeps a row per album for ever, so deleting a folder left a
+# ghost tile in the grid. Pruning has a sharp edge: an unmounted library looks
+# exactly like every album having been deleted at once, so it is gated on the
+# same mount check the status banner uses.
+
+
+def test_a_deleted_album_is_dropped_from_the_grid(tmp_path):
+    client, art = _studio(tmp_path, manifest={
+        "Miles Davis/Kind of Blue": {"status": "ok", "file": "kob.jpg",
+                                     "width": 3000, "height": 3000},
+        "Gone/Away": {"status": "ok", "file": "gone.jpg",
+                      "width": 3000, "height": 3000},
+    })
+    (art / "kob.jpg").write_bytes(b"\xff\xd8k")
+    (art / "gone.jpg").write_bytes(b"\xff\xd8g")
+
+    albums = client.get("/api/artwork/manifest").get_json()["albums"]
+
+    assert [a["album"] for a in albums] == ["Miles Davis/Kind of Blue"]
+    # Pruned for good, not merely hidden...
+    assert "Gone/Away" not in json.loads((art / "manifest.json").read_text())
+    # ...and its image is not left behind on the card.
+    assert not (art / "gone.jpg").exists()
+    assert (art / "kob.jpg").exists()
+
+
+def test_pruning_keeps_the_hand_made_override(tmp_path):
+    """A pin is a human judgement; the folder may come back renamed."""
+    client, art = _studio(tmp_path, manifest={
+        "Gone/Away": {"status": "ok", "file": "g.jpg", "width": 3000,
+                      "height": 3000}})
+    (art / "overrides.json").write_text(json.dumps(
+        {"Gone/Away": {"url": "http://pinned"}}))
+
+    client.get("/api/artwork/manifest")
+
+    assert json.loads((art / "overrides.json").read_text()) == {
+        "Gone/Away": {"url": "http://pinned"}}
+
+
+def test_an_unmounted_library_prunes_nothing(tmp_path):
+    """Every album looks deleted at once. Touch nothing."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    art = tmp_path / "art"
+    art.mkdir()
+    (art / "manifest.json").write_text(json.dumps(
+        {"Miles Davis/Kind of Blue": {"status": "ok", "file": "k.jpg",
+                                      "width": 3000, "height": 3000}}))
+    (art / "k.jpg").write_bytes(b"\xff\xd8k")
+    config = Config(library_root=empty, cards_file=tmp_path / "cards.yaml",
+                    artwork_dir=art)
+    store = CardStore(config.cards_file)
+    controller = Controller(FakeOwnTone(), store, FakeSnapshot(), config,
+                            clock=FakeClock())
+    app = create_app(config, controller, store, collector=_offline_collector)
+    app.config.update(TESTING=True)
+
+    albums = app.test_client().get("/api/artwork/manifest").get_json()["albums"]
+
+    assert [a["album"] for a in albums] == ["Miles Davis/Kind of Blue"]
+    assert (art / "k.jpg").exists()
+
+
+# --- cards pointing at albums that are gone --------------------------------
+
+
+def test_a_card_for_a_missing_album_is_flagged_as_an_orphan(app_ctx):
+    client, _, store = app_ctx
+    _register(client, "aa", "Miles Davis/Kind of Blue")
+    # Registration refuses an album that does not exist, so an orphan can only
+    # be made the way it happens in life: register, then delete the folder.
+    cards = store.load()
+    cards["bb"] = Card(uid="bb", name="Swedish Metal Aid",
+                       path="The State of Samuel/Swedish Metal Aid")
+    store.save(cards)
+    flagged = {c["uid"]: c["orphan"]
+               for c in client.get("/api/cards").get_json()["cards"]}
+    assert flagged == {"aa": False, "bb": True}
+
+
+def test_no_card_is_an_orphan_when_the_library_is_not_mounted(tmp_path):
+    """Otherwise a dropped NAS mount flags the whole registry as broken."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    config = Config(library_root=empty, cards_file=tmp_path / "cards.yaml")
+    store = CardStore(config.cards_file)
+    controller = Controller(FakeOwnTone(), store, FakeSnapshot(), config,
+                            clock=FakeClock())
+    app = create_app(config, controller, store)
+    app.config.update(TESTING=True)
+    store.save({"aa": Card(uid="aa", name="Kind of Blue",
+                           path="Miles Davis/Kind of Blue")})
+    cards = app.test_client().get("/api/cards").get_json()["cards"]
+    assert [c["orphan"] for c in cards] == [False]
+
+
+def test_pruning_is_skipped_while_a_collection_is_running(tmp_path):
+    """The collector saves after every album; a read-modify-write here would
+    drop whatever it wrote in between."""
+    client, art = _studio(tmp_path, manifest={
+        "Gone/Away": {"status": "ok", "file": "g.jpg", "width": 3000,
+                      "height": 3000}})
+    client.application.extensions["collect_state"]["running"] = True
+
+    client.get("/api/artwork/manifest")
+
+    assert "Gone/Away" in json.loads((art / "manifest.json").read_text())
+
+
+# --- rescanning the library ------------------------------------------------
+#
+# /srv/music is a read-only CIFS mount, so OwnTone gets no inotify events and
+# never notices a new album. The nightly cron only helps if the box happens to
+# be powered on at 04:30, which it often is not.
+
+
+class FakeLibrary:
+    def __init__(self, updating=False):
+        self.updates = 0
+        self._updating = updating
+        self.fail = None
+
+    def update_library(self):
+        if self.fail:
+            raise self.fail
+        self.updates += 1
+
+    def library_status(self):
+        return {"songs": 2085, "albums": 168, "updating": self._updating}
+
+    def outputs(self):
+        return [{"name": "Computer", "selected": True}]
+
+
+def _library_app(app_ctx, fake):
+    from nfc_jukebox import web as web_module
+    _, controller, store = app_ctx
+    app = web_module.create_app(Config(), controller, store, owntone=fake)
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def test_rescan_asks_owntone_to_update(app_ctx):
+    fake = FakeLibrary()
+    client = _library_app(app_ctx, fake)
+    body = client.post("/api/library/rescan").get_json()
+    assert fake.updates == 1
+    assert body["started"] is True
+
+
+def test_rescan_reports_owntone_being_unreachable(app_ctx):
+    fake = FakeLibrary()
+    fake.fail = RuntimeError("connection refused")
+    client = _library_app(app_ctx, fake)
+    response = client.post("/api/library/rescan")
+    assert response.status_code == 502
+    assert response.get_json()["error"]
+
+
+def test_status_reports_the_library_counts(app_ctx):
+    client = _library_app(app_ctx, FakeLibrary(updating=True))
+    body = client.get("/api/status").get_json()
+    assert body["library"]["albums"] == 168
+    assert body["library"]["updating"] is True
+
+
+def test_status_survives_owntone_having_no_library_answer(app_ctx):
+    """The status line must never be the thing that breaks."""
+    client, _, _ = app_ctx          # built with no owntone at all
+    assert client.get("/api/status").get_json()["library"] is None
+
+
+def test_the_status_line_does_not_ask_owntone_every_second(app_ctx):
+    """A rescan makes /api/library slow -- 13s was measured on the box -- and
+    the page polls status once a second. Cache it like the outputs."""
+    fake = FakeLibrary()
+    calls = []
+    original = fake.library_status
+    fake.library_status = lambda: (calls.append(1), original())[1]
+    client = _library_app(app_ctx, fake)
+
+    for _ in range(5):
+        client.get("/api/status")
+
+    assert len(calls) == 1, f"asked OwnTone {len(calls)} times"
+
+
+def test_a_slow_library_answer_leaves_the_last_one_on_screen(app_ctx, monkeypatch):
+    fake = FakeLibrary()
+    client = _library_app(app_ctx, fake)
+    assert client.get("/api/status").get_json()["library"]["albums"] == 168
+
+    def boom():
+        raise RuntimeError("scanning, too busy")
+
+    fake.library_status = boom
+    import nfc_jukebox.web as web_module
+    # Expire the cache without waiting for it. Capture the real clock first:
+    # patching the name it is read through would make the lambda call itself.
+    real_monotonic = time.monotonic
+    monkeypatch.setattr(web_module.time, "monotonic",
+                        lambda: real_monotonic() + 3600)
+    assert client.get("/api/status").get_json()["library"]["albums"] == 168
