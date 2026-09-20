@@ -216,10 +216,33 @@ def load_manifest(directory: str) -> dict:
         return json.load(handle)
 
 
-def save_manifest(directory: str, manifest: dict) -> None:
+def _save_json(directory: str, name: str, payload: dict) -> None:
+    """Write atomically, because these files have concurrent readers.
+
+    A collection saves the manifest after every album while the admin page is
+    polling it, and pruning writes it too. open(..., "w") truncates in place,
+    so a reader lands on a half-written file and json.load raises -- which
+    takes down the page that was only trying to show progress.
+    """
     os.makedirs(directory, exist_ok=True)
-    with open(os.path.join(directory, "manifest.json"), "w") as handle:
-        json.dump(manifest, handle, indent=1, ensure_ascii=False)
+    path = os.path.join(directory, name)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as handle:
+            json.dump(payload, handle, indent=1, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)               # atomic on POSIX
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def save_manifest(directory: str, manifest: dict) -> None:
+    _save_json(directory, "manifest.json", manifest)
 
 
 def load_overrides(directory: str) -> dict:
@@ -231,9 +254,7 @@ def load_overrides(directory: str) -> dict:
 
 
 def save_overrides(directory: str, overrides: dict) -> None:
-    os.makedirs(directory, exist_ok=True)
-    with open(os.path.join(directory, "overrides.json"), "w") as handle:
-        json.dump(overrides, handle, indent=1, ensure_ascii=False)
+    _save_json(directory, "overrides.json", overrides)
 
 
 class _Args:
