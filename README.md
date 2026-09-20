@@ -138,6 +138,31 @@ pinning a specific image URL; those corrections are hand-made judgements and
 Pick your speakers in OwnTone at **http://jukebox.local:3689**. The jukebox
 remembers them.
 
+### Registering a stack of cards
+
+Kneeling next to the box to register a shelf of albums gets old. Plug a USB
+NFC reader into your laptop instead:
+
+```bash
+python3 -m pip install pyscard
+python3 tools/desk_reader.py --host jukebox.local:8080
+```
+
+Tap a card, pick the album in the Register tab, save, tap the next. Each tap
+prints `known card` or `NEW card`, so you can work through a pile without
+watching the browser.
+
+The scan is **identification only** — it cannot start, stop or switch a
+record, so registering at a desk never interrupts what is playing in the
+room. `--dry-run` prints UIDs without telling the jukebox, and `--silence`
+turns off the reader's beep for good.
+
+Tested with an ACS ACR122U, which reports UIDs byte-identical to the PN532 on
+the box. Worth confirming that for any other reader before registering a
+stack: scan a card you have already registered and check it matches
+`cards.yaml`. Some readers report the UID byte-reversed, which would leave
+every card you register pointing at nothing.
+
 ## Documentation
 
 - **[`docs/runbook.md`](docs/runbook.md)** — hardware settings, the Wi-Fi and
