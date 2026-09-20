@@ -340,13 +340,34 @@ The UID tells you which you have: **7 bytes starting `04`** is an NTAG (good);
 **4 bytes** is Mifare-Classic-style (flickers). As of 2026-09-20 the registry
 holds 78 of the bad kind and 54 of the good.
 
-This is not academic. The unexplained play/pause glitch on 2026-09-19 was
-`acd997ee` - José González/Veneer, a 4-byte card. The log showed a pause and a
-resume 0.9s apart, meaning roughly 1.4s of continuous absence from a card that
-had not moved. That is the documented flicker running longer than
-`presence_debounce_s` absorbs, not a mechanical problem.
+**The 4-byte cards already registered are fine. Do not "fix" them.** Measured
+2026-09-20 on `acd997ee` (José González/Veneer) sitting motionless on the built
+box:
 
-Buy **NTAG213 or NTAG215**, 25-30mm round wet inlay. The chip name must be in
+| | |
+|---|---|
+| present/removed episodes | 4325 in 150s (~29/s) |
+| every hold | 0.01s |
+| absence run, median | 26.1 ms |
+| absence run, p99.9 | 26.5 ms |
+| absence run, **worst** | **26.5 ms** |
+| runs long enough to read as a lift | **0 of 1742** |
+
+So the flicker is real and fast, and completely irrelevant: the absence run is
+metronomic, p99.9 and worst differ by 0.1 ms, and `presence_debounce_s` at 0.5
+has ~19x margin over it. Raising the debounce buys nothing and costs lag on
+every lift. **This was proposed and rejected on the measurement.**
+
+It also clears flicker of the 2026-09-19 play/pause glitch on this very card:
+that was ~1.4s of absence, **53x the worst run this card produces**. Still
+unexplained; look for something mechanical, not for a timing value to tune.
+
+Re-measure with `spikes/presence_check.py` rather than reasoning about it. Both
+probes used here pulse RSTPDN on GPIO20 first, because stopping the service
+leaves the PN532 out of frame sync and the plain spike cannot open it.
+
+For *new* cards buy **NTAG213 or NTAG215**, 25-30mm round wet inlay - better
+engineered and with margin to spare, not because the existing ones misbehave. The chip name must be in
 the listing; "13.56MHz NFC sticker" with no chip named is usually Mifare
 Classic. 213/215/216 differ only in memory, which is irrelevant - this project
 never writes to a tag, it reads the UID and nothing else. Avoid on-metal
