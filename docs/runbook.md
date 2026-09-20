@@ -109,7 +109,7 @@ associates, completes the 4-way handshake, logs *"Connected to wireless
 network"* - and then DHCP opens a transaction and gets nothing. The box is
 alive and believes it is fine, while being completely unreachable.
 
-### What this is NOT - three theories that were wrong
+### What this is NOT - four theories that were wrong
 
 Each cost real time. Do not re-run them.
 
@@ -119,10 +119,10 @@ probe actively. Plausible, and wrong: on 2026-09-19 the identical failure
 reproduced on **channel 36, a non-DFS channel**, with the router's 5 GHz band
 correctly pinned. DFS is not necessary to produce this.
 
-What actually correlates across every observation is the **5 GHz signal
-level**, with a cliff somewhere around -67 dBm: -66 dBm worked, -69 dBm failed,
-twice. The earlier "changing to channel 36 fixed it" result was almost
-certainly a few dB gained from moving the box, not the channel.
+The signal-level explanation that replaced it is also wrong - see *Not the
+signal level* below. The earlier "changing to channel 36 fixed it" result was
+almost certainly neither the channel nor the margin; whatever it was, it did
+not hold.
 
 **Not a 2.4 GHz radio fault.** This runbook previously stated the board sees
 zero 2.4 GHz networks, ever, and fails even a directed probe. That is no longer
@@ -133,6 +133,22 @@ it. Note also that the two bands are *separate SSIDs* here, so the old
 "forcing the 2.4 GHz band didn't work" test proved nothing: it was forcing a
 profile for `<5GHz-SSID>`, which does not exist on 2.4.
 
+**Not the signal level.** This runbook previously identified a cliff around
+-67 dBm - -66 dBm worked, -69 dBm failed, twice. That is wrong. On 2026-09-20
+the board associated with `<5GHz-SSID>` on channel 36 at **-63 to -65 dBm**,
+*better* than the -66 dBm that reportedly worked, held the association for two
+unbroken minutes, and passed **zero bytes**. A static address was configured so
+DHCP was bypassed entirely, and it still could not reach the gateway.
+
+So the failure is neither about margin nor about DHCP. `iw` during the attempt:
+
+    rate=6.0/390.0    d_rx=0
+
+Transmit negotiated 390 Mbit/s. Receive was pinned at 6.0 Mbit/s - the floor -
+and not one byte arrived. **The 5 GHz receive path is dead on this board**, and
+DHCP timing out is just the first thing you notice. For scale, a Mac in the same
+room uses that same channel 36 AP at -73 dBm, ten dB weaker, with 0% loss.
+
 **Not the enclosure.** The box ran for months in that same enclosure in that
 same spot, and 2.4 GHz works fine inside it today. The enclosure does not
 change, so it cannot explain a box that stops working.
@@ -140,7 +156,14 @@ change, so it cannot explain a box that stops working.
 ### A USB Wi-Fi adapter is not currently needed
 
 Earlier advice here was to buy one. With 2.4 GHz working at -58 dBm that is
-unnecessary. If the box is ever moved somewhere 2.4 also fails, pick one whose
+unnecessary - and note that the jitter which once looked like a reason to buy
+one turned out to be the 4 MB SMB read size, fixed in software (see *Read size*
+above). Measure `rsize` before spending money on a radio.
+
+A dongle remains the **only** route to 5 GHz on this box, since the onboard
+5 GHz receive path is dead rather than marginal. That is a want, not a need,
+while 2.4 GHz carries a FLAC in and two AirPlay streams out with a median
+latency of 5 ms. If the box is ever moved somewhere 2.4 also fails, pick one whose
 driver is in the mainline kernel so nothing has to be rebuilt when the kernel
 updates: the **Alfa AWUS036ACM** (MediaTek MT7612U, `mt76x2u`, dual-band,
 detachable antenna) or the cheaper **Panda PAU0B** (RT5572, `rt2800usb`).
@@ -209,7 +232,8 @@ The library is an SMB mount from the UGREEN NAS, mounted read-only at
 ```
 //192.168.2.46/Media/music/library /srv/music cifs \
   credentials=/etc/samba/creds/nas,uid=pi,gid=pi,file_mode=0444,dir_mode=0555,\
-  iocharset=utf8,ro,nofail,_netdev,x-systemd.automount,x-systemd.idle-timeout=600 0 0
+  iocharset=utf8,ro,nofail,_netdev,x-systemd.automount,x-systemd.idle-timeout=600,\
+  rsize=131072,wsize=131072 0 0
 ```
 
 **By IP, deliberately, not `//vestnas.local/`.** The hostname version worked
@@ -229,6 +253,36 @@ a DHCP reservation on the router.
 Credentials live in `/etc/samba/creds/nas` (`0600`, root). Recreate with
 `sudo /usr/local/sbin/nas-creds charlesvestal`, which prompts rather than
 taking the password as an argument.
+
+### Read size: cap it at 128 KB, or playback stutters
+
+**`rsize=131072` is not optional over Wi-Fi.** SMB3 defaults to 4 MB reads. On
+this link that is about a second of airtime delivered as a single slug, and
+everything else queues behind it - including AirPlay 2's PTP timing packets,
+which are what keep a HomePod stereo pair in sync. The audible symptom is a
+flanging or delay effect swelling in and out: the two speakers drift apart and
+you are hearing comb filtering. It sounds like a speaker fault or an OwnTone
+fault. It is neither.
+
+Measured 2026-09-20, pinging the gateway while reading from the NAS with
+`iflag=direct` so each read is exactly one wire request:
+
+| Read size | Worst RTT | Pings over 200 ms | Throughput |
+|---|---|---|---|
+| idle | 74 ms | 0 of 80 | - |
+| **4 MB** (the default) | **4517 ms** | **70 of 80** | 1.6 MB/s |
+| **128 KB** | 189 ms | 0 of 80 | **2.0 MB/s** |
+
+Smaller reads are *faster as well as smoother* - nothing is traded away. Across
+one-minute samples, 4 MB reads put a spike above 200 ms into 41% of minutes;
+with the cap, four consecutive minutes of playback peaked at 53.6 ms.
+
+This also disposes of a whole class of symptom that reads as a Wi-Fi fault:
+multi-second stalls, ping swinging from 7 ms to 400 ms, and the rx rate
+collapsing from 72.2 to 39.0 Mbit/s while tx holds steady. That is self-inflicted
+congestion from one large read, not a weak or broken radio. **Check the read
+size before blaming the link** - an afternoon went into the radio before anyone
+looked at `rsize`.
 
 Three details that matter:
 

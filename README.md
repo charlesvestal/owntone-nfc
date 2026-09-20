@@ -107,14 +107,18 @@ to hand.
 ### If it goes in an enclosure
 
 Test networking in its final position before assembling everything, and **put
-it on 2.4 GHz**. A Pi's internal antenna has little margin, and 5 GHz has
-repeatedly proved to be the wrong side of it: at about -69 dBm this board
-associates, completes the handshake, reports itself connected — and then never
-completes DHCP, so the box is alive and believes it is fine while being
-completely unreachable. The same spot measures roughly 11 dB better on 2.4.
+it on 2.4 GHz**. This board's 5 GHz receive path does not work: it associates,
+completes the handshake, reports itself connected — and receives nothing. Not
+"less", nothing. Transmit negotiates 390 Mbit/s while receive sits pinned at
+6 Mbit/s, the floor, and zero bytes arrive. DHCP timing out is the first
+symptom you notice, not the fault.
+
+This was blamed on signal margin for a long time, and that was wrong: it fails
+at -63 dBm just as completely as at -69, while a Mac in the same room uses the
+same 5 GHz AP at -73 dBm without trouble. Don't go hunting for a few dB.
 
 The failure is binary rather than gradual, and it does not announce itself.
-[`docs/runbook.md`](docs/runbook.md) has the measurements and the three
+[`docs/runbook.md`](docs/runbook.md) has the measurements and the four
 plausible explanations that turned out to be wrong.
 
 ## Getting started
