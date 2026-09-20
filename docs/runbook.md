@@ -311,19 +311,28 @@ Three details that matter:
   `.init-rescan` trigger file is not an option either. `PUT /api/update` is the
   only route.
 
-  **The nightly cron at 04:30 has probably never run.** `/etc/cron.d/owntone-rescan`
-  is correct and cron is healthy, but the box is switched off overnight, and
-  without `anacron` a missed `cron.d` job is never caught up. Found 2026-09-20:
-  OwnTone's `updated_at` was stuck three days back, and two manual scans took it
-  from 168 to 172 albums and 2085 to 2153 songs - four albums and 68 songs it had
-  never seen.
+  **The nightly cron at 04:30 never ran, and we do not know why.**
+  `/etc/cron.d/owntone-rescan` was correct and cron was healthy. Found
+  2026-09-20: OwnTone's `updated_at` was stuck three days back, and two manual
+  scans took it from 168 to 172 albums and 2085 to 2153 songs - four albums and
+  68 songs it had never seen.
+
+  This runbook previously blamed the box being switched off overnight. **That is
+  wrong: the box runs continuously and is never switched off.** So a 04:30 job
+  had every opportunity to fire and did not, and the real cause was never
+  established. The evidence is gone - persistent journald was only enabled on
+  2026-09-20, so there is no log older than that to go back to. If the rescan
+  ever silently stops again, that history now exists; use it.
 
   Use the **Rescan library** button on the admin page's System tab. It reports
   progress and the new counts. By hand:
   `curl -X PUT http://jukebox.local:3689/api/update`.
 
-  The durable fix is a systemd timer with `Persistent=true`, which runs a missed
-  job shortly after boot instead of skipping it. Not done yet.
+  **Done:** replaced by a systemd timer (`owntone-rescan.timer`) with
+  `Persistent=true`. The justification is not the nightly-power-off story that
+  turned out to be false - it is that a timer catches up a job missed for *any*
+  reason, including the unknown one above, and `systemctl list-timers` shows
+  when it last fired. Cron offered neither.
 
 The initial bulk scan of ~2,000 files took **520 seconds** over SMB on Wi-Fi.
 That is a one-time cost; incremental scans are much faster.
