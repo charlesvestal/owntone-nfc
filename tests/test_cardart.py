@@ -11,6 +11,7 @@ ones that were wrong.
 import os
 import struct
 import sys
+import time
 
 import pytest
 
@@ -240,3 +241,46 @@ def test_a_transparent_png_flattens_onto_white_not_black(tmp_path):
     Image.new("RGBA", (8, 8), (0, 0, 0, 0)).save(path, format="PNG")
     with Image.open(__import__("io").BytesIO(as_jpeg(str(path)))) as img:
         assert img.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+
+
+# --- the manifest is written atomically -------------------------------------
+
+
+def test_a_manifest_is_never_readable_half_written(tmp_path):
+    """Two writers and a reader share this file: the collector saves after
+    every album, and a manifest GET prunes albums whose folder has gone. A
+    plain open(..., 'w') truncates in place, so a reader can catch a partial
+    file and blow up on json.load."""
+    import json
+    import threading
+    from nfc_jukebox.cardart.collect import load_manifest, save_manifest
+
+    big = {f"Artist {i}/Album {i}": {"status": "ok", "file": f"{i}.jpg",
+                                     "width": 3000, "height": 3000}
+           for i in range(400)}
+    save_manifest(str(tmp_path), big)
+
+    errors = []
+    stop = threading.Event()
+
+    def writer():
+        while not stop.is_set():
+            save_manifest(str(tmp_path), big)
+
+    def reader():
+        while not stop.is_set():
+            try:
+                load_manifest(str(tmp_path))
+            except (json.JSONDecodeError, ValueError) as exc:
+                errors.append(exc)
+                return
+
+    threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
+    for t in threads:
+        t.start()
+    time.sleep(0.4)
+    stop.set()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"read a half-written manifest: {errors[0]}"
