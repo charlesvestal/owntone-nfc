@@ -1156,3 +1156,23 @@ def test_the_admin_page_is_never_cached(app_ctx):
     client, _, _ = app_ctx
     cache = client.get("/").headers.get("Cache-Control", "")
     assert "no-store" in cache
+
+
+def test_the_library_listing_is_not_walked_on_every_request(app_ctx, monkeypatch):
+    """_album_rows globs the library over SMB. /api/cards and /api/albums are
+    polled once a second by the page, and 185 albums over CIFS measured 7.3s
+    on the box -- so the walk has to be cached, not repeated."""
+    import nfc_jukebox.web as web_module
+    client, _, _ = app_ctx
+
+    walks = []
+    real_glob = web_module.Path.glob
+
+    def counting_glob(self, pattern):
+        walks.append(pattern)
+        return real_glob(self, pattern)
+
+    monkeypatch.setattr(web_module.Path, "glob", counting_glob)
+    for _ in range(5):
+        client.get("/api/cards")
+    assert len(walks) <= 1, f"walked the library {len(walks)} times"
