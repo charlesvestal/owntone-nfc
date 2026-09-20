@@ -143,6 +143,12 @@ class Controller:
         # reset hour has fallen between then and now.
         self._loaded_uid: str | None = None
         self._loaded_at: datetime.datetime | None = None
+        # True until this process has acted on its first recognised card.
+        # Adoption keys off this rather than off `_loaded_uid` being None,
+        # which is also true after an album has played itself out -- and
+        # adopting *then* would resume a finished record instead of starting
+        # it over.
+        self._fresh_start = True
 
         self._paused_at = 0.0
         # The last selection we declined to save because it had only shrunk.
@@ -207,6 +213,15 @@ class Controller:
         if card is None:
             self.last_error = f"Unknown card {uid}"
             log.warning(self.last_error)
+            return
+
+        # First card since this service started, and OwnTone may never have
+        # stopped: it outlives us, so a redeploy can leave the record still
+        # turning. Take that over rather than clearing the queue and dropping
+        # the needle on side one again. Only ever for the album actually
+        # queued, and only when we have no memory of our own to trust.
+        fresh, self._fresh_start = self._fresh_start, False
+        if fresh and self._adopt_playing_album(uid, card):
             return
 
         # A recognised card is a fresh start, so the status line starts clean:
@@ -324,26 +339,53 @@ class Controller:
                                    or f"Could not start {card.name} over")
             return card.name
 
+    def _adopt_playing_album(self, uid: str, card) -> bool:
+        """Take over an album OwnTone is already playing. True if adopted.
+
+        Deliberately narrow: it answers "is this exact record on the
+        turntable", and anything unexpected -- OwnTone unreachable, a
+        different album, stopped -- falls through to the normal path, which
+        loads the album properly.
+        """
+        try:
+            state = (self._owntone.player_state() or {}).get("state")
+            if state not in ("play", "pause"):
+                return False
+            if not self._owntone.queue_holds_album(card.path):
+                return False
+        except Exception:                                   # noqa: BLE001
+            # Never let this optimisation be the thing that stops a card
+            # working: fall back to loading the album.
+            log.debug("Could not check what is playing", exc_info=True)
+            return False
+
+        if state == "pause":
+            with self._guarded("resuming the album already loaded"):
+                self._owntone.play()
+        self._loaded_uid = uid
+        self._loaded_at = self._wall_clock()
+        self._last_uid = uid
+        self.now_playing = card.name
+        self.state = State.PLAYING
+        self.last_error = None
+        log.info("Adopted the album already playing: %s", card.name)
+        return True
+
     def set_management_mode(self, enabled: bool) -> None:
         """Turn card-identification-only mode on or off.
 
-        Enabling stops playback: the point is a quiet box to register against,
-        and leaving the current album running would defeat it.
+        What changes is what a card *read* means: in management mode a card
+        identifies itself and nothing else. It does not start an album, does
+        not pause on removal, and does not switch records.
+
+        Playback is deliberately untouched, entering or leaving. This used to
+        stop the record and clear the queue, reasoning that you want a quiet
+        box to register against -- but registering happens while music is
+        playing, and silencing the room because someone opened the admin page
+        is worse than the noise. The mode governs the reader, not the player.
         """
         with self._lock:
-            was = self.management_mode
             self.management_mode = bool(enabled)
-            if self.management_mode and not was:
-                with self._guarded("stopping for management mode"):
-                    self._owntone.stop()
-                    self._owntone.clear_queue()
-                self.state = State.IDLE
-                self.now_playing = None
-                self._last_uid = None
-                # The queue really is empty now, so there is no place left to
-                # hold: the first card tapped after management mode starts its
-                # album from track 1.
-                self._forget_loaded()
 
     def on_card_removed(self) -> None:
         with self._lock:
