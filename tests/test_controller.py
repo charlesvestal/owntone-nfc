@@ -1385,3 +1385,51 @@ def test_only_the_first_card_after_a_restart_can_adopt(ctx, wall):
 
     fresh.on_card_present("bbbb")
     assert ("play_album", "Fleetwood Mac/Rumours") in owntone.calls
+
+
+# --- scans from a reader that is not the jukebox's own ----------------------
+#
+# Registering 54 albums kneeling next to the box is a worse afternoon than
+# doing it at a desk. A scan from elsewhere identifies a card and nothing
+# else -- the same contract management mode already has.
+
+
+def test_a_noted_scan_identifies_without_playing(ctx):
+    controller, owntone, _, _ = ctx
+    controller.note_scan("aaaa")
+    assert controller.last_seen_uid == "aaaa"
+    assert not owntone.calls
+    assert controller.state is State.IDLE
+
+
+def test_a_noted_scan_never_disturbs_a_playing_record(ctx):
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+    owntone.calls.clear()
+
+    controller.note_scan("bbbb")             # a different album entirely
+
+    assert not owntone.calls
+    assert controller.state is State.PLAYING
+    assert controller.last_seen_uid == "bbbb"
+
+
+def test_a_noted_scan_learns_an_unregistered_card(ctx):
+    controller, _, _, _ = ctx
+    controller.note_scan("ffff")
+    assert controller.last_seen_uid == "ffff"
+    assert "ffff" in (controller.last_error or "")
+
+
+def test_a_noted_scan_clears_the_error_for_a_known_card(ctx):
+    controller, _, _, _ = ctx
+    controller.note_scan("ffff")
+    controller.note_scan("aaaa")
+    assert controller.last_error is None
+
+
+def test_a_noted_scan_is_normalised(ctx):
+    """The desk reader may format the UID differently."""
+    controller, _, _, _ = ctx
+    controller.note_scan("AA:AA")
+    assert controller.last_seen_uid == "aaaa"

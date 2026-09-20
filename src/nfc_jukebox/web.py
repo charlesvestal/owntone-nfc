@@ -201,6 +201,22 @@ def create_app(config, controller, store, owntone=None, power=None,
             return jsonify(error=f"Could not reach OwnTone: {exc}"), 502
         return jsonify(started=True)
 
+    @app.post("/api/scan")
+    def scan():
+        """A card read by a reader that is not the jukebox's own.
+
+        Lets registration happen at a desk with a USB reader instead of
+        kneeling next to the box. Identification only -- it cannot start,
+        stop or switch a record -- so the page behaves exactly as if the card
+        had been tapped on the jukebox, and the room is undisturbed.
+        """
+        payload = request.get_json(silent=True) or {}
+        uid = normalise_uid(payload.get("uid") or "")
+        if not uid:
+            return jsonify(error="Which card?"), 400
+        controller.note_scan(uid)
+        return jsonify(uid=uid, known=store.get(uid) is not None)
+
     @app.put("/api/management")
     def management():
         payload = request.get_json(silent=True) or {}
