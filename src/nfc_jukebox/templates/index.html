@@ -413,7 +413,7 @@ function showPanel(name) {
     document.getElementById('panel-' + b.dataset.panel).hidden = !on;
   });
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
-  if (name === 'artwork') loadArtwork();
+  if (name === 'artwork') loadArtworkSafely();
 }
 document.querySelectorAll('#tabs button').forEach(b =>
   b.addEventListener('click', () => showPanel(b.dataset.panel)));
@@ -436,7 +436,13 @@ function artFigure(a) {
     img.alt = '';
     fig.append(img);
   } else {
-    fig.append(el('div', a.why || 'nothing found')).lastChild.className = 'none';
+    // Node.append() returns undefined, so the old one-liner that chained
+    // .lastChild off it threw for every album with no artwork -- and because
+    // the grid is built with map(), one such album took the whole render down
+    // and left the page stuck on its last status message.
+    const none = el('div', a.why || 'nothing found');
+    none.className = 'none';
+    fig.append(none);
   }
   const cap = el('figcaption');
   const parts = a.album.split('/');
@@ -492,7 +498,20 @@ async function loadArtwork() {
     bar.style.width = '0';
   }
 }
-async function pollArtwork() { artPolling = false; await loadArtwork(); }
+// A throw anywhere in loadArtwork leaves the page frozen on whatever it last
+// said -- no grid, no error, and the poll loop dead. That is how one album
+// with no artwork made the whole tab look hung. Report it and let the loop
+// carry on, the same way refresh() does for the play panel.
+async function loadArtworkSafely() {
+  try {
+    await loadArtwork();
+  } catch (err) {
+    document.getElementById('artmsg').textContent =
+      'Could not draw the artwork: ' + err;
+    artPolling = false;
+  }
+}
+async function pollArtwork() { artPolling = false; await loadArtworkSafely(); }
 
 async function collect() {
   document.getElementById('artmsg').textContent = 'Starting\u2026';
@@ -507,7 +526,7 @@ async function collect() {
       'Everything already has artwork. Tick "start again" to redo it.';
     return;
   }
-  loadArtwork();
+  loadArtworkSafely();
 }
 
 async function fixArtwork(a) {
@@ -547,7 +566,7 @@ async function fixArtwork(a) {
   // Redraw from the manifest rather than from the pasted URL: the tile has to
   // show what will print, and loadArtwork picks up the new mtime that busts
   // the cached copy of the old image.
-  loadArtwork();
+  loadArtworkSafely();
 }
 
 async function makeSheets() {
