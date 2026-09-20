@@ -181,13 +181,21 @@ def _render(directory: str, chosen: list, out_path: str) -> int:
 
 
 def build_sheets(directory: str, out_path: str, min_px: int = 0,
-                 include_suspect: bool = False) -> dict:
-    """Write the print PDF. Returns what went on it and what did not."""
+                 include_suspect: bool = False,
+                 only: set[str] | None = None) -> dict:
+    """Write the print PDF. Returns what went on it and what did not.
+
+    `only` restricts the sheet to a set of album paths, so what prints matches
+    what the page is showing. Without it the manifest decides, and an album
+    collected weeks ago for a different purpose turns up on the sheet.
+    """
     with open(os.path.join(directory, "manifest.json")) as handle:
         manifest = json.load(handle)
 
     chosen, skipped = [], []
     for album_path, entry in sorted(manifest.items()):
+        if only is not None and album_path not in only:
+            continue
         if entry.get("status") != "ok":
             skipped.append((album_path, entry.get("status", "?")))
         elif min_px and entry["width"] < min_px:

@@ -1176,3 +1176,75 @@ def test_the_library_listing_is_not_walked_on_every_request(app_ctx, monkeypatch
     for _ in range(5):
         client.get("/api/cards")
     assert len(walks) <= 1, f"walked the library {len(walks)} times"
+
+
+# --- reprinting albums that already have cards ------------------------------
+#
+# The studio is normally the print queue: albums awaiting a card. Replacing a
+# whole set of cards needs the opposite view, and artwork for the 131 albums
+# that have never been collected because they were already done.
+
+
+def test_assigned_albums_are_hidden_by_default(tmp_path):
+    client, _ = _studio(tmp_path)
+    client.post("/api/cards", json={"uid": "aa",
+                                    "path": "Miles Davis/Kind of Blue"})
+    assert client.get("/api/artwork/manifest").get_json()["albums"] == []
+
+
+def test_all_shows_albums_that_already_have_cards(tmp_path):
+    client, _ = _studio(tmp_path)
+    client.post("/api/cards", json={"uid": "aa",
+                                    "path": "Miles Davis/Kind of Blue"})
+    albums = client.get("/api/artwork/manifest?all=1").get_json()["albums"]
+    assert [a["album"] for a in albums] == ["Miles Davis/Kind of Blue"]
+    assert albums[0]["assigned"] is True
+
+
+def test_collecting_all_targets_albums_that_have_cards(tmp_path):
+    seen = []
+
+    def collector(album_path, out_dir, library_root, overrides):
+        seen.append(album_path)
+        return {"status": "ok", "file": "x.jpg", "width": 3000, "height": 3000}
+
+    client, _ = _studio(tmp_path, collector=collector)
+    client.post("/api/cards", json={"uid": "aa",
+                                    "path": "Miles Davis/Kind of Blue"})
+
+    assert client.post("/api/artwork/collect").get_json()["total"] == 0
+    body = client.post("/api/artwork/collect", json={"all": True}).get_json()
+    assert body["total"] == 1
+
+
+def test_sheets_only_print_the_albums_on_screen(tmp_path):
+    """What prints must match what the grid shows, or an untick produces a
+    surprise forty-page PDF built from whatever was collected earlier."""
+    (tmp_path / "Fleetwood Mac" / "Rumours").mkdir(parents=True)
+    client, art = _studio(tmp_path, manifest={
+        "Miles Davis/Kind of Blue": {"status": "ok", "file": "a.jpg",
+                                     "width": 3000, "height": 3000},
+        "Fleetwood Mac/Rumours": {"status": "ok", "file": "b.jpg",
+                                  "width": 3000, "height": 3000}})
+    client.post("/api/cards", json={"uid": "aa",
+                                    "path": "Miles Davis/Kind of Blue"})
+
+    from nfc_jukebox.cardart import build_sheets
+    import nfc_jukebox.web as web_module
+    calls = {}
+
+    def fake_sheets(directory, out_path, min_px, include_suspect, only=None):
+        calls["only"] = only
+        return {"cards": 1, "pages": 1, "skipped": []}
+
+    web_module.__dict__.setdefault("_", None)
+    import nfc_jukebox.cardart as cardart
+    original = cardart.build_sheets
+    cardart.build_sheets = fake_sheets
+    try:
+        client.post("/api/artwork/sheets", json={})
+        assert calls["only"] == {"Fleetwood Mac/Rumours"}
+        client.post("/api/artwork/sheets", json={"all": True})
+        assert calls["only"] is None
+    finally:
+        cardart.build_sheets = original
