@@ -191,13 +191,13 @@ async function refresh() {
 
   // Only ever written while the System tab can show it, so a scan started
   // here reports itself finishing without the page having to poll separately.
-  const lib = document.getElementById('libmsg');
-  if (lib && s.library) {
+  const scanmsg = document.getElementById('libmsg');
+  if (scanmsg && s.library) {
     if (s.library.updating) {
-      lib.textContent = 'Scanning\u2026';
-    } else if (lib.textContent.startsWith('Scanning\u2026')) {
-      lib.textContent = `Done. ${s.library.albums} albums, `
-                      + `${s.library.songs} songs.`;
+      scanmsg.textContent = 'Scanning\u2026';
+    } else if (scanmsg.textContent.startsWith('Scanning\u2026')) {
+      scanmsg.textContent = `Done. ${s.library.albums} albums, `
+                          + `${s.library.songs} songs.`;
     }
   }
 
