@@ -45,6 +45,15 @@
   figure.suspect{ border-top-color:#e0a63e; }
   figure.bad    { border-top-color:#c9584f; }
   figure.skipped{ border-top-color:#bbb; opacity:.55; }
+  /* Not looked for yet. Deliberately quiet -- an album nobody has got to is
+     not a problem, and must not read like the red 'bad' edge. */
+  figure.pending{ border-top-color:#ddd; }
+  figure.pending .none { color:#aaa; }
+  /* The one being fetched right now, so a run is legible at a glance. */
+  figure.scanning{ border-top-color:#4a7fc1; box-shadow:0 0 0 2px #4a7fc1; }
+  @keyframes pulse { 50% { opacity:.45; } }
+  figure.scanning .none { animation: pulse 1.2s ease-in-out infinite;
+                          color:#4a7fc1; }
   figure img { display:block; width:100%; aspect-ratio:1; object-fit:cover;
                background:#eee; }
   figure .none { display:flex; aspect-ratio:1; align-items:center;
@@ -455,9 +464,9 @@ showPanel((location.hash || '#play').slice(1));
 // --- artwork -----------------------------------------------------------
 let artPolling = false;
 
-function artFigure(a) {
+function artFigure(a, current) {
   const fig = el('figure');
-  fig.className = a.verdict;
+  fig.className = a.verdict + (a.album === current ? ' scanning' : '');
   if (a.file) {
     const img = document.createElement('img');
     // ?v= is the cache key, not a route parameter: the response is cached
@@ -475,6 +484,7 @@ function artFigure(a) {
     // and left the page stuck on its last status message.
     const none = el('div', a.why || 'nothing found');
     none.className = 'none';
+    if (a.album === current) none.textContent = 'fetching\u2026';
     fig.append(none);
   }
   const cap = el('figcaption');
@@ -514,17 +524,19 @@ async function loadArtwork() {
   const shown = showSkipped
     ? body.albums
     : body.albums.filter(a => a.verdict !== 'skipped');
-  grid.replaceChildren(...shown.map(artFigure));
+  grid.replaceChildren(...shown.map(a => artFigure(a, body.current)));
 
   const counts = {};
   body.albums.forEach(a => counts[a.verdict] = (counts[a.verdict] || 0) + 1);
   const hidden = body.albums.length - shown.length;
   document.getElementById('artcount').textContent = body.albums.length
-    ? `${body.albums.length} album(s): ${(counts.local || 0)} from the library, ` +
+    ? `${body.albums.length} album(s) awaiting a card: ` +
+      `${(counts.local || 0)} from the library, ` +
       `${(counts.fetched || 0)} fetched, ${(counts.suspect || 0)} to check, ` +
-      `${(counts.bad || 0)} unusable, ${(counts.skipped || 0)} skipped` +
+      `${(counts.bad || 0)} unusable, ${(counts.skipped || 0)} skipped, ` +
+      `${(counts.pending || 0)} not collected yet` +
       (hidden ? ` \u2014 ${hidden} hidden` : '')
-    : 'Nothing collected yet.';
+    : 'Every album has a card.';
 
   const bar = document.getElementById('artbar');
   bar.style.width = body.total ? (100 * body.done / body.total) + '%' : '0';
