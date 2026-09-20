@@ -274,6 +274,13 @@ def create_app(config, controller, store, owntone=None, power=None,
             return jsonify(url=None)
 
 
+    # The library is a network mount: 185 albums over CIFS measured 7.3s to
+    # walk. /api/cards and /api/albums are polled once a second by the page,
+    # so this must not be repeated per request. Albums appear when someone
+    # copies files to a NAS, which is not a once-a-second event.
+    _albums_cache: dict = {"at": 0.0, "value": None}
+    _ALBUMS_TTL_S = 15.0
+
     def _album_rows():
         """Every album in the library, and whether it already has a card.
 
@@ -285,12 +292,21 @@ def create_app(config, controller, store, owntone=None, power=None,
         second card to an album you have already done is otherwise invisible
         until you tap it.
         """
-        root = Path(config.library_root)
-        found = sorted(
-            str(path.relative_to(root))
-            for path in root.glob("*/*")
-            if path.is_dir()
-        )
+        now = time.monotonic()
+        if (_albums_cache["value"] is not None
+                and now - _albums_cache["at"] < _ALBUMS_TTL_S):
+            found = _albums_cache["value"]
+        else:
+            root = Path(config.library_root)
+            found = sorted(
+                str(path.relative_to(root))
+                for path in root.glob("*/*")
+                if path.is_dir()
+            )
+            _albums_cache["at"] = now
+            _albums_cache["value"] = found
+        # Cards are read fresh: registering one must show up at once, and it
+        # is a local file rather than the network mount.
         assigned = {c.path: c.name for c in store.load().values()}
         return [{"path": path,
                  "assigned": path in assigned,
