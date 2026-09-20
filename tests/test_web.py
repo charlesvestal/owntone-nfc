@@ -513,10 +513,17 @@ def _studio(tmp_path, collector=None, manifest=None):
     return app.test_client(), art
 
 
-def test_artwork_manifest_is_empty_before_anything_is_collected(tmp_path):
+def test_albums_are_listed_as_pending_before_anything_is_collected(tmp_path):
+    """The grid shows the whole job from the start, not just what is done.
+
+    This used to assert an empty list: the grid was built from the manifest, so
+    a box that had never collected showed nothing at all and a run made albums
+    appear one at a time.
+    """
     client, _ = _studio(tmp_path)
     body = client.get("/api/artwork/manifest").get_json()
-    assert body["albums"] == []
+    assert [(a["album"], a["verdict"]) for a in body["albums"]] == [
+        ("Miles Davis/Kind of Blue", "pending")]
     assert body["running"] is False
 
 
@@ -1074,3 +1081,78 @@ def test_every_element_the_script_looks_up_exists_in_the_markup():
     present = set(re.findall(r"""\bid=["']([\w-]+)["']""", html))
     missing = sorted(wanted - present)
     assert not missing, f"script looks up ids that do not exist: {missing}"
+
+
+# --- albums not collected yet ----------------------------------------------
+#
+# The grid was built from the manifest alone, so an album nobody had collected
+# simply did not exist on the page. On a fresh box that meant an empty tab, and
+# during a run the albums appeared one at a time -- so there was no way to see
+# the size of the job or what was being worked on.
+
+
+def test_an_album_with_no_manifest_entry_still_appears(tmp_path):
+    client, _ = _studio(tmp_path)          # library has Miles Davis/Kind of Blue
+    albums = client.get("/api/artwork/manifest").get_json()["albums"]
+    assert [a["album"] for a in albums] == ["Miles Davis/Kind of Blue"]
+    row = albums[0]
+    assert row["verdict"] == "pending"
+    assert row["file"] is None
+
+
+def test_a_pending_album_is_not_reported_as_a_failure(tmp_path):
+    """'bad' means looked for and not found; these have not been looked for."""
+    client, _ = _studio(tmp_path)
+    row = client.get("/api/artwork/manifest").get_json()["albums"][0]
+    assert row["verdict"] != "bad"
+    assert row["why"] == "not collected yet"
+
+
+def test_collected_and_pending_albums_appear_together(tmp_path):
+    (tmp_path / "Fleetwood Mac" / "Rumours").mkdir(parents=True)
+    client, art = _studio(tmp_path, manifest={
+        "Miles Davis/Kind of Blue": {"status": "ok", "file": "k.jpg",
+                                     "width": 3000, "height": 3000}})
+    albums = {a["album"]: a["verdict"]
+              for a in client.get("/api/artwork/manifest").get_json()["albums"]}
+    assert albums["Miles Davis/Kind of Blue"] == "fetched"
+    assert albums["Fleetwood Mac/Rumours"] == "pending"
+
+
+def test_an_album_with_a_card_is_not_listed(tmp_path):
+    """The studio is the print queue: albums awaiting a card, nothing else."""
+    client, _ = _studio(tmp_path)
+    client.post("/api/cards", json={"uid": "aa",
+                                    "path": "Miles Davis/Kind of Blue"})
+    albums = client.get("/api/artwork/manifest").get_json()["albums"]
+    assert albums == []
+
+
+def test_an_unreadable_library_falls_back_to_the_manifest(tmp_path):
+    """Listing nothing must not blank a grid that has real results in it."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    art = tmp_path / "art"
+    art.mkdir()
+    (art / "manifest.json").write_text(json.dumps(
+        {"Miles Davis/Kind of Blue": {"status": "ok", "file": "k.jpg",
+                                      "width": 3000, "height": 3000}}))
+    config = Config(library_root=empty, cards_file=tmp_path / "cards.yaml",
+                    artwork_dir=art)
+    store = CardStore(config.cards_file)
+    controller = Controller(FakeOwnTone(), store, FakeSnapshot(), config,
+                            clock=FakeClock())
+    app = create_app(config, controller, store, collector=_offline_collector)
+    app.config.update(TESTING=True)
+    albums = app.test_client().get("/api/artwork/manifest").get_json()["albums"]
+    assert [a["album"] for a in albums] == ["Miles Davis/Kind of Blue"]
+
+
+def test_the_admin_page_is_never_cached(app_ctx):
+    """The page is the app. A browser holding yesterday's copy runs yesterday's
+    JavaScript against today's API, which looks like the box misbehaving --
+    and there is no version in the URL to break the cache with, because the
+    page is served from '/'."""
+    client, _, _ = app_ctx
+    cache = client.get("/").headers.get("Cache-Control", "")
+    assert "no-store" in cache

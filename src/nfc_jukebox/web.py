@@ -147,6 +147,19 @@ def create_app(config, controller, store, owntone=None, power=None,
             "updating": bool(body.get("updating"))}
         return _library_cache["value"]
 
+    @app.after_request
+    def _never_cache_the_page(response):
+        """The admin page must always be the deployed one.
+
+        Artwork is cached for a year because its URL carries the file's mtime;
+        the page has no such version, so a cached copy means a browser running
+        old JavaScript against a new API. That surfaces as the box behaving
+        oddly rather than as an obviously stale page, which is worse.
+        """
+        if request.path == "/":
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+        return response
+
     @app.get("/api/status")
     def status():
         # Resolve the last scanned card here rather than in the controller:
@@ -383,8 +396,33 @@ def create_app(config, controller, store, owntone=None, power=None,
             if stale:
                 cardart_collect.save_manifest(out_dir, manifest)
 
+        # Every album awaiting a card, not just the ones already collected.
+        # Built from the manifest alone, the grid could not show the size of
+        # the job or what a run was working on -- albums simply materialised
+        # one at a time, and a fresh box showed an empty tab.
+        #
+        # `known` is None when the library cannot be read; fall back to the
+        # manifest then rather than blanking a grid that has real results.
+        if known is None:
+            waiting = sorted(manifest)
+        else:
+            waiting = sorted(row["path"] for row in _album_rows()
+                             if not row["assigned"])
         albums = []
-        for album_path, entry in sorted(manifest.items()):
+        for album_path in waiting:
+            entry = manifest.get(album_path)
+            if entry is None:
+                # Not looked for yet, which is not the same as looked for and
+                # not found: "bad" would put a red edge on an album nobody has
+                # got to.
+                albums.append({
+                    "album": album_path, "status": None, "file": None,
+                    "width": None, "height": None, "source": None,
+                    "score": None, "verdict": "pending",
+                    "why": "not collected yet",
+                    "override": overrides.get(album_path), "mtime": None,
+                })
+                continue
             verdict, why = classify(entry, 0)
             albums.append({
                 "album": album_path,
