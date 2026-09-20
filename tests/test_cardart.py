@@ -284,3 +284,57 @@ def test_a_manifest_is_never_readable_half_written(tmp_path):
         t.join()
 
     assert not errors, f"read a half-written manifest: {errors[0]}"
+
+
+# --- bleed and trim marks ---------------------------------------------------
+#
+# A printer cutting to 95mm needs the artwork to run past the cut line, or a
+# fraction of a millimetre of drift leaves a white hairline down one edge. The
+# art is centre-cropped to the square anyway, so bleed costs nothing.
+
+
+def test_bleed_cannot_make_neighbouring_cards_overlap():
+    """The vertical gap is only 3mm, so bleed is capped at half of it. Any
+    more and one album's artwork prints over the next one's."""
+    from nfc_jukebox.cardart import sheets
+    assert sheets.BLEED_MM * 2 <= min(sheets.GAP_X, sheets.GAP_Y)
+
+
+def test_trim_marks_stay_out_of_the_bleed():
+    """A mark drawn over the artwork would be cut into the card."""
+    from nfc_jukebox.cardart import sheets
+    assert sheets.MARK_LEN_MM <= sheets.GAP_Y - sheets.BLEED_MM
+
+
+def _one_card_pdf(tmp_path):
+    import json
+    from PIL import Image
+    from nfc_jukebox.cardart import build_sheets
+    art = tmp_path / "art"
+    art.mkdir()
+    Image.new("RGB", (3000, 3000), (30, 60, 90)).save(art / "a.jpg", "JPEG")
+    (art / "manifest.json").write_text(json.dumps(
+        {"A/B": {"status": "ok", "file": "a.jpg", "width": 3000,
+                 "height": 3000, "score": 1.0}}))
+    out = str(tmp_path / "sheet.pdf")
+    result = build_sheets(str(art), out, 0, True)
+    return result, pathlib.Path(out).read_bytes()
+
+
+def test_a_sheet_carries_trim_marks(tmp_path):
+    import pathlib
+    globals()["pathlib"] = pathlib
+    result, pdf = _one_card_pdf(tmp_path)
+    assert result["cards"] == 1
+    # Stroked paths exist only for the marks; the artwork is painted, not drawn.
+    assert b" S\n" in pdf or b" S " in pdf or pdf.count(b"\nS\n") > 0
+
+
+def test_the_artwork_is_drawn_past_the_cut_line(tmp_path):
+    """The clip box has to be the bleed box, not the 95mm trim box."""
+    import pathlib
+    globals()["pathlib"] = pathlib
+    from nfc_jukebox.cardart import sheets
+    _, pdf = _one_card_pdf(tmp_path)
+    bleed_pt = (sheets.CARD_MM + 2 * sheets.BLEED_MM) * sheets.MM
+    assert f"{bleed_pt:.3f}".encode() in pdf, "no clip box at the bleed size"
