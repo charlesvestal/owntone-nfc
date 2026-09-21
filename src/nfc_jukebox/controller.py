@@ -157,6 +157,11 @@ class Controller:
         # See _save_selection.
         self._last_shrunken_selection: list[str] | None = None
 
+        # Intended outputs that have gone missing from OwnTone's list and that
+        # we are still waiting on. See _check_outputs: a speaker off the
+        # network comes back, and re-selecting it then is worth doing.
+        self._awaiting_return: set[str] = set()
+
         # The outputs *we* last wrote, so that the next card can tell "the user
         # changed this in OwnTone's web UI" from "this is the state we left
         # behind ourselves". Written only where we call set_outputs, plus by
@@ -524,6 +529,7 @@ class Controller:
         Caller holds the lock.
         """
         self._intended_outputs = set(intended) if intended else None
+        self._awaiting_return = set()
         self._next_output_check = self._clock() + OUTPUT_CHECK_INTERVAL_S
         self._outputs_generation += 1
 
@@ -590,8 +596,47 @@ class Controller:
                 self._outputs_generation += 1
                 return
 
+            # A speaker we were waiting on is back in OwnTone's list. Give it
+            # one more chance to pair, rather than making the listener lift the
+            # card to get stereo back. Bounded by construction: this fires only
+            # on the absent -> present transition, and if the receiver then
+            # refuses, it is `deselected` on the next pass and the watch drops.
+            returning = self._awaiting_return & known
+            if returning:
+                self._awaiting_return -= returning
+                names = ", ".join(sorted(returning))
+                try:
+                    self._set_outputs(sorted(intended))
+                except Exception as exc:  # see _guarded for why this is broad
+                    self.last_error = (
+                        f"OwnTone error while re-selecting {names}: {exc}")
+                    log.warning(self.last_error, exc_info=True)
+                else:
+                    self.last_error = None
+                    log.info("Output(s) %s came back; re-selected them", names)
+                return
+
             lost = intended - selected
             if not lost:
+                self._awaiting_return.clear()
+                return
+
+            # Gone from the list is not the same as refusing to pair. A speaker
+            # off the network said nothing at all, and those come back, so keep
+            # watching for it instead of dropping the watch. Reported once on
+            # the way out and then quietly, or one HomePod's absence becomes a
+            # warning every interval for the rest of the side.
+            missing = lost - known
+            if missing and not (lost & known):
+                newly = missing - self._awaiting_return
+                self._awaiting_return |= missing
+                self._last_set_outputs = set(selected)
+                if newly:
+                    self.last_error = (
+                        f"Output(s) {', '.join(sorted(newly))} are no longer "
+                        "known to OwnTone; the record is playing without them"
+                    )
+                    log.warning(self.last_error)
                 return
 
             # Whatever this was, we have now *seen* it happen under us, so it

@@ -1514,3 +1514,72 @@ def test_a_speaker_that_vanished_is_never_taken_as_a_deliberate_change(ctx):
         "a speaker that vanished from OwnTone must not be forgotten, "
         "however often it happens"
     )
+
+
+def test_a_vanished_speaker_is_re_selected_when_it_comes_back(ctx):
+    """A speaker off the network is not a speaker refusing to pair.
+
+    `_check_outputs` stops watching after reporting a loss, on the reasoning
+    that re-selecting a receiver which just refused pairing will only refuse
+    again. True for a `deselected` one - it is still listed, and it said no.
+    A `vanished` one never said anything: it fell off the network. Those come
+    back, and re-selecting on the way back converges instead of looping.
+
+    Without this, a HomePod that blips mid-record leaves the rest of the side
+    playing in mono, and the only way to get stereo back is to lift the card.
+    """
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+
+    gone = owntone.outputs.pop(1)          # off the network altogether
+    clock.advance(30.0)
+    controller.tick()
+    assert "no longer" in (controller.last_error or "")
+
+    owntone.calls.clear()
+    gone["selected"] = False
+    owntone.outputs.append(gone)           # and back again
+    clock.advance(30.0)
+    controller.tick()
+
+    assert any(c[0] == "set_outputs" for c in owntone.calls), \
+        "did not re-select the speaker when it returned"
+    assert owntone.selected_output_ids() == ["1", "2"]
+    assert controller.last_error is None
+
+
+def test_a_receiver_that_refused_to_pair_is_not_retried(ctx):
+    """The other half of the rule, and the reason it is not simply "retry".
+
+    A receiver still in OwnTone's list that deselected itself has refused.
+    Asking again produces the same refusal, so this must stay a single report
+    rather than becoming a loop that never converges.
+    """
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+
+    owntone.outputs[1]["selected"] = False   # listed, but refused to pair
+    clock.advance(30.0)
+    controller.tick()
+    assert "deselected themselves" in (controller.last_error or "")
+
+    owntone.calls.clear()
+    clock.advance(30.0)
+    controller.tick()
+    assert not any(c[0] == "set_outputs" for c in owntone.calls), \
+        "retried a receiver that had already refused"
+
+
+def test_a_vanished_speaker_is_reported_once_while_it_stays_away(ctx):
+    """Keeping the watch alive must not turn one HomePod's absence into a
+    warning every interval for the rest of the side."""
+    controller, owntone, _, clock = _start_with_both_outputs(ctx)
+
+    owntone.outputs.pop(1)
+    clock.advance(30.0)
+    controller.tick()
+    controller.last_error = None            # operator has seen it
+
+    for _ in range(3):
+        clock.advance(30.0)
+        controller.tick()
+
+    assert controller.last_error is None, "re-reported a speaker already known gone"
