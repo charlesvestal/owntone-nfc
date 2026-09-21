@@ -1477,3 +1477,40 @@ def test_lifting_the_card_mid_record_still_pauses(ctx):
 
     assert ("pause",) in owntone.calls
     assert controller.state is State.PAUSED
+
+
+def test_a_speaker_that_vanished_is_never_taken_as_a_deliberate_change(ctx):
+    """A drop and a deselect are only indistinguishable while the output is
+    still *there*.
+
+    `_check_outputs` already separates the two: an output missing from
+    OwnTone's list entirely is `vanished`, one present but unselected is
+    `deselected`. Deselecting in the web UI leaves the speaker listed. Only a
+    fault removes it. So a shrink whose missing members are gone from the list
+    cannot be somebody's choice, however many times it repeats, and must never
+    be allowed to overwrite the saved pair.
+
+    Found on the box 2026-09-21: a night of Wi-Fi trouble repeatedly took
+    HomePod Right out of OwnTone's list, the repeat-shrink rule read that as
+    intent, and the snapshot was rewritten to Left only - so the next card
+    restored one speaker and the record played in mono with nothing to say why.
+    """
+    controller, owntone, snapshot, clock = ctx
+    snapshot.save(["1", "2"])
+    owntone.outputs[1]["selected"] = True
+
+    # Gone from the list, not merely unselected - and it STAYS gone, which is
+    # what a speaker off the network actually does. Bringing it back between
+    # cycles resets the shrink counter and hides the bug entirely.
+    owntone.outputs[:] = [o for o in owntone.outputs if o["id"] != "2"]
+
+    for _ in range(3):
+        controller.on_card_present("aaaa")
+        controller.on_card_removed()
+        clock.advance(91.0)
+        controller.tick()
+
+    assert snapshot.load() == ["1", "2"], (
+        "a speaker that vanished from OwnTone must not be forgotten, "
+        "however often it happens"
+    )
