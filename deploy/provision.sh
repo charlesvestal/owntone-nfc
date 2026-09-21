@@ -171,14 +171,11 @@ say "Nightly library rescan"
 # A read-only network mount sends no inotify events and cannot carry OwnTone's
 # .init-rescan trigger file, so new albums are invisible until it is told.
 #
-# A systemd timer rather than cron. The cron it replaces had never run once,
-# and the reason was never established -- an earlier note here blamed the box
-# being switched off overnight, which is simply untrue: it runs continuously.
-#
-# Persistent=true is the point regardless. It catches up a job missed for ANY
-# reason, known or not, and `systemctl list-timers` shows when it last fired.
-# Cron offered neither, which is why a silent three-day-stale library went
-# unnoticed.
+# A systemd timer rather than cron, and the reason is Persistent=true: this box
+# sits on a smart switch that cuts power overnight -- measured off at 22:07,
+# back at 05:36 -- so a 04:30 cron entry never fires and cron does not catch up.
+# The timer runs the missed job shortly after the next boot instead.
+# Found the hard way -- the cron it replaces had never run once.
 install -m 0644 "$REPO/deploy/owntone-rescan.service" \
     /etc/systemd/system/owntone-rescan.service
 install -m 0644 "$REPO/deploy/owntone-rescan.timer" \

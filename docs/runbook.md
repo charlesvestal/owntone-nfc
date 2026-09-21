@@ -311,28 +311,47 @@ Three details that matter:
   `.init-rescan` trigger file is not an option either. `PUT /api/update` is the
   only route.
 
-  **The nightly cron at 04:30 never ran, and we do not know why.**
-  `/etc/cron.d/owntone-rescan` was correct and cron was healthy. Found
-  2026-09-20: OwnTone's `updated_at` was stuck three days back, and two manual
-  scans took it from 168 to 172 albums and 2085 to 2153 songs - four albums and
-  68 songs it had never seen.
+  **The nightly cron at 04:30 never ran, because the box is on a smart switch
+  that cuts power overnight.** `/etc/cron.d/owntone-rescan` was correct and
+  cron was healthy. Found 2026-09-20: OwnTone's `updated_at` was stuck three
+  days back, and two manual scans took it from 168 to 172 albums and 2085 to
+  2153 songs - four albums and 68 songs it had never seen.
 
-  This runbook previously blamed the box being switched off overnight. **That is
-  wrong: the box runs continuously and is never switched off.** So a 04:30 job
-  had every opportunity to fire and did not, and the real cause was never
-  established. The evidence is gone - persistent journald was only enabled on
-  2026-09-20, so there is no log older than that to go back to. If the rescan
-  ever silently stops again, that history now exists; use it.
+  Measured across 2026-09-20/21: **power off at 22:07, back on at 05:36.** A
+  04:30 `cron.d` job falls squarely inside that window and never fires, and
+  without `anacron` cron never catches it up.
+
+  The switch is easy to forget - it was briefly asserted here that this box
+  runs continuously and is never switched off, which is wrong and sent a
+  morning's debugging after a box that was simply unplugged. Hence the times,
+  written down.
+
+  **Reading logs across that power cut: there is no RTC on a Pi.** On boot,
+  systemd restores the clock from `/var/lib/systemd/timesync/clock` - the last
+  time written before power was lost - and only jumps to the real time once NTP
+  syncs a few seconds later. So the first entries of every boot are stamped
+  with *last night's* time:
+
+      systemd[1]: System time advanced to timestamp on
+                  /var/lib/systemd/timesync/clock: Sun 2026-09-20 22:07:03 CEST
+
+  which makes `journalctl --list-boots` show a boot that appears to begin
+  before the previous one ended, and looks for all the world like the box never
+  rebooted. `uptime -s` is the honest answer. That saved timestamp is also the
+  most precise record of when power was cut, since timesyncd writes it
+  periodically: 22:07:03 on 2026-09-20, matching the last `wifi-watch` line at
+  22:07:22 and OwnTone's last line at 22:07:24, all stopping mid-stream with no
+  shutdown sequence.
 
   Use the **Rescan library** button on the admin page's System tab. It reports
   progress and the new counts. By hand:
   `curl -X PUT http://jukebox.local:3689/api/update`.
 
   **Done:** replaced by a systemd timer (`owntone-rescan.timer`) with
-  `Persistent=true`. The justification is not the nightly-power-off story that
-  turned out to be false - it is that a timer catches up a job missed for *any*
-  reason, including the unknown one above, and `systemctl list-timers` shows
-  when it last fired. Cron offered neither.
+  `Persistent=true`, which runs the missed job shortly after the switch powers
+  the box back up rather than skipping it. It also covers any other reason a
+  run is missed, and `systemctl list-timers` shows when it last fired - cron
+  offered neither, which is how a three-day-stale library went unnoticed.
 
 The initial bulk scan of ~2,000 files took **520 seconds** over SMB on Wi-Fi.
 That is a one-time cost; incremental scans are much faster.
