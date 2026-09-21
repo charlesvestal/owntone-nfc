@@ -769,6 +769,36 @@ class Controller:
             return
         saved = self._snapshot.load()
         shrunk = set(selected) < set(saved)
+        if shrunk:
+            missing = set(saved) - set(selected)
+            # A deselect and a drop are only indistinguishable while the output
+            # is still listed. Deselecting in the web UI leaves the speaker
+            # there, unselected; only a fault takes it out of OwnTone's list
+            # altogether -- the distinction _check_outputs already draws
+            # between `deselected` and `vanished`. So a shrink whose missing
+            # members are gone entirely is never somebody's choice, and must
+            # not stick however often it repeats.
+            #
+            # Found 2026-09-21: a night of Wi-Fi trouble repeatedly took a
+            # HomePod out of OwnTone's list, the repeat-shrink rule below read
+            # that as intent, and rewrote a stereo pair down to one speaker.
+            # The next card then restored one speaker and the record played in
+            # mono, with nothing on the page to say why.
+            try:
+                known = set(self._owntone.all_output_ids())
+            except Exception:  # see _guarded for why this is so broad
+                # Cannot tell. Keeping a speaker we should have forgotten is a
+                # far cheaper mistake than forgetting one we should have kept.
+                known = set()
+            if not missing <= known:
+                gone = ", ".join(sorted(missing - known))
+                self.last_error = (
+                    f"Output(s) {gone} are not in OwnTone's list at all, so "
+                    "this is a drop and not a choice; keeping the saved "
+                    "speakers."
+                )
+                log.warning(self.last_error)
+                return
         if shrunk and self._last_shrunken_selection != sorted(selected):
             self._last_shrunken_selection = sorted(selected)
             missing = ", ".join(sorted(set(saved) - set(selected)))
