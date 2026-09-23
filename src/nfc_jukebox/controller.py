@@ -28,6 +28,8 @@ import time
 from contextlib import contextmanager
 from typing import Callable, Iterator
 
+import httpx
+
 from .cards import normalise_uid
 
 log = logging.getLogger(__name__)
@@ -72,10 +74,11 @@ class State(enum.Enum):
 class _Outcome:
     """Whether the guarded OwnTone interaction actually got through."""
 
-    __slots__ = ("ok",)
+    __slots__ = ("ok", "error")
 
     def __init__(self) -> None:
         self.ok = True
+        self.error: Exception | None = None
 
 
 class Controller:
@@ -250,6 +253,9 @@ class Controller:
 
         with self._guarded(f"starting {card.name}") as outcome:
             self._owntone.play_album(card.path)
+        if not outcome.ok and self._started_anyway(card, outcome.error):
+            outcome.ok = True
+            self.last_error = None
         if not outcome.ok:
             # Nothing is playing, so do not claim otherwise - and nothing is
             # loaded either, so the next tap must not try to resume into
@@ -268,6 +274,36 @@ class Controller:
         self._next_playback_check = self._clock() + PLAYBACK_CHECK_INTERVAL_S
         self.now_playing = card.name
         self.state = State.PLAYING
+
+    def _started_anyway(self, card, error: Exception | None) -> bool:
+        """Did a start that timed out get through regardless?
+
+        OwnTone answers "add to the queue and play" only once the speakers
+        have connected, and a pair of HomePods can take longer than the
+        client's timeout to do that. The album then plays while we believe it
+        failed and sit IDLE -- so lifting the card pauses nothing. Seen on
+        2026-09-23 with The Lemon of Pink.
+
+        Only a timeout is ambiguous. A refusal (4xx/5xx, an empty search)
+        means nothing was queued, and is left as the failure it is.
+
+        Caller holds the lock.
+        """
+        if not isinstance(error, httpx.TimeoutException):
+            return False
+        try:
+            state = (self._owntone.player_state() or {}).get("state")
+            if state != "play":
+                return False
+            if not self._owntone.queue_holds_album(card.path):
+                return False
+        except Exception:                                   # noqa: BLE001
+            log.warning("Could not check whether %s started after a timeout",
+                        card.name, exc_info=True)
+            return False
+        log.info("Starting %s timed out, but it is playing; carrying on",
+                 card.name)
+        return True
 
     def _resume(self, card, uid: str) -> None:
         """Pick the needle back up where it was. Caller holds the lock.
@@ -500,6 +536,7 @@ class Controller:
             yield outcome
         except Exception as exc:
             outcome.ok = False
+            outcome.error = exc
             self.last_error = f"OwnTone error while {what}: {exc}"
             log.warning(self.last_error, exc_info=True)
 

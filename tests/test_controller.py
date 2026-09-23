@@ -728,6 +728,41 @@ def test_play_album_failure_does_not_escape_and_is_recorded(ctx):
     assert controller.now_playing is None
 
 
+def _slow_start(owntone):
+    """OwnTone queues and plays the album, but answers after the client has
+    given up: what a pair of HomePods taking their time to connect looks like."""
+    real = owntone.play_album
+
+    def play_album(path):
+        real(path)
+        raise httpx.ReadTimeout("timed out")
+    return play_album
+
+
+def test_a_start_that_timed_out_but_is_playing_counts_as_started(ctx):
+    controller, owntone, _, _ = ctx
+    owntone.play_album = _slow_start(owntone)
+    controller.on_card_present("aaaa")
+    assert controller.state is State.PLAYING
+    assert controller.last_error is None
+
+    # The point of it: lifting the card has to pause the record.
+    owntone.calls.clear()
+    controller.on_card_removed()
+    assert ("pause",) in owntone.calls
+
+
+def test_a_start_that_timed_out_and_is_not_playing_is_still_a_failure(ctx):
+    controller, owntone, _, _ = ctx
+
+    def timed_out(path):
+        raise httpx.ReadTimeout("timed out")
+    owntone.play_album = timed_out
+    controller.on_card_present("aaaa")
+    assert controller.state is not State.PLAYING
+    assert controller.last_error is not None
+
+
 def test_resume_failure_does_not_escape(ctx):
     controller, owntone, _, clock = ctx
     controller.on_card_present("aaaa")
