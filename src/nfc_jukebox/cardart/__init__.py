@@ -12,10 +12,10 @@ from .artlib import (CONFIDENT, MATCH_FLOOR, flac_picture, image_size,
                      title_match)
 from .collect import DEFAULT_MIN_PX, collect_album, load_manifest, save_manifest
 from .review import classify
-from .sheets import CARD_MM, PAGE_H_MM, PAGE_W_MM, build_sheets
+from .sheets import CARD_MM, LAYOUTS, PAGE_H_MM, PAGE_W_MM, build_sheets
 
 __all__ = [
-    "CONFIDENT", "MATCH_FLOOR", "DEFAULT_MIN_PX", "CARD_MM",
+    "CONFIDENT", "MATCH_FLOOR", "DEFAULT_MIN_PX", "CARD_MM", "LAYOUTS",
     "PAGE_W_MM", "PAGE_H_MM",
     "flac_picture", "image_size", "jpeg_size", "png_size", "rank_candidates",
     "search_terms", "slug", "title_match",

@@ -288,41 +288,81 @@ def test_a_manifest_is_never_readable_half_written(tmp_path):
 
 # --- card size and trim marks -----------------------------------------------
 #
-# The art is exactly 95mm with white gaps between cards; the marks continue
-# each cut line through the gaps and never touch the artwork.
+# Every card is exactly 95mm, so nothing of the cover is lost to the cut. On A4
+# the cards have white gaps and the marks continue each cut line through them;
+# on A3 the cards touch, the outside of the block carries mirrored bleed, and
+# the marks sit in the margins.
 
 
-def test_trim_marks_stay_out_of_the_artwork():
-    """A mark drawn over the artwork would be cut into the card."""
+def _cards(layout):
+    from nfc_jukebox.cardart import sheets
+    return [(x, y, x + sheets.CARD_MM, y + sheets.CARD_MM)
+            for x, y in map(layout.cell, range(layout.per_page))]
+
+
+def _mark_points(layout, count):
     import re
     from nfc_jukebox.cardart import sheets
-    cards = []
-    for slot in range(sheets.COLS * sheets.ROWS):
-        col, row = slot % sheets.COLS, slot // sheets.COLS
-        x = sheets.GAP_X + col * (sheets.CARD_MM + sheets.GAP_X)
-        y = sheets.PAGE_H_MM - (sheets.GAP_Y + row * (sheets.CARD_MM + sheets.GAP_Y)
-                                + sheets.CARD_MM)
-        cards.append((x, y, x + sheets.CARD_MM, y + sheets.CARD_MM))
-    for line in sheets._trim_marks(len(cards))[1:-1]:
-        x0, y0, x1, y1 = (float(v) / sheets.MM for v in re.findall(r"[\d.]+", line))
+    for line in sheets._trim_marks(count, layout)[1:-1]:
+        x0, y0, x1, y1 = (float(v) / sheets.MM for v in re.findall(r"-?[\d.]+", line))
         for t in (0, 0.5, 1):
-            px, py = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
-            for cx0, cy0, cx1, cy1 in cards:
-                assert not (cx0 < px < cx1 and cy0 < py < cy1), line
+            yield line, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
 
 
-def _one_card_pdf(tmp_path):
+@pytest.mark.parametrize("paper", ["a4", "a3"])
+def test_trim_marks_stay_out_of_the_artwork(paper):
+    """A mark drawn over the artwork -- or its bleed -- would be cut into a
+    card."""
+    from nfc_jukebox.cardart import sheets
+    layout = sheets.LAYOUTS[paper]
+    b = layout.bleed_mm
+    for line, px, py in _mark_points(layout, layout.per_page):
+        for cx0, cy0, cx1, cy1 in _cards(layout):
+            assert not (cx0 - b < px < cx1 + b and cy0 - b < py < cy1 + b), line
+
+
+def test_a3_matches_the_print_spec():
+    from nfc_jukebox.cardart import sheets
+    a3 = sheets.LAYOUTS["a3"]
+    assert (a3.page_w, a3.page_h, a3.per_page) == (297, 420, 8)
+    xs = sorted({round(c[0], 3) for c in _cards(a3)})
+    ys = sorted({round(c[1], 3) for c in _cards(a3)})
+    assert xs == [53.5, 148.5]
+    assert ys == [20, 115, 210, 305]
+    cut_x, cut_y = sheets._cut_lines(a3, a3.rows)
+    assert cut_x == [53.5, 148.5, 243.5]
+    assert cut_y == [20, 115, 210, 305, 400]
+
+
+def test_a3_marks_start_five_mm_clear_of_the_bleed():
+    from nfc_jukebox.cardart import sheets
+    a3 = sheets.LAYOUTS["a3"]
+    clear = a3.bleed_mm + sheets.MARGIN_MARK_OFFSET_MM
+    for line, px, py in _mark_points(a3, 3):
+        outside_x = min(abs(px - 53.5), abs(px - 243.5)) if not 53.5 < px < 243.5 else 0
+        outside_y = min(abs(py - 20), abs(py - 400)) if not 20 < py < 400 else 0
+        assert max(outside_x, outside_y) >= clear - 1e-2, line
+
+
+def test_a3_is_marked_in_full_even_on_a_short_page():
+    """The block is cut as a whole, so the empty padding cells get marks too."""
+    from nfc_jukebox.cardart import sheets
+    a3 = sheets.LAYOUTS["a3"]
+    assert sheets._trim_marks(1, a3) == sheets._trim_marks(8, a3)
+
+
+def _one_card_pdf(tmp_path, paper="a4", px=3000):
     import json
     from PIL import Image
     from nfc_jukebox.cardart import build_sheets
     art = tmp_path / "art"
     art.mkdir()
-    Image.new("RGB", (3000, 3000), (30, 60, 90)).save(art / "a.jpg", "JPEG")
+    Image.new("RGB", (px, px), (30, 60, 90)).save(art / "a.jpg", "JPEG")
     (art / "manifest.json").write_text(json.dumps(
-        {"A/B": {"status": "ok", "file": "a.jpg", "width": 3000,
-                 "height": 3000, "score": 1.0}}))
+        {"A/B": {"status": "ok", "file": "a.jpg", "width": px,
+                 "height": px, "score": 1.0}}))
     out = str(tmp_path / "sheet.pdf")
-    result = build_sheets(str(art), out, 0, True)
+    result = build_sheets(str(art), out, 0, True, paper=paper)
     return result, pathlib.Path(out).read_bytes()
 
 
@@ -343,3 +383,39 @@ def test_the_artwork_is_drawn_at_exactly_the_card_size(tmp_path):
     _, pdf = _one_card_pdf(tmp_path)
     card_pt = sheets.CARD_MM * sheets.MM
     assert f"{card_pt:.3f} {card_pt:.3f} re W n".encode() in pdf
+
+
+def test_a3_mirrors_the_outside_edges_and_keeps_the_card_whole(tmp_path):
+    """The card is still exactly 95mm; the bleed is extra, reflected outward.
+    A lone card in the top-left cell borders the outside on its left and top,
+    so it gets a left strip, a top strip and the corner between them."""
+    import pathlib
+    globals()["pathlib"] = pathlib
+    from nfc_jukebox.cardart import sheets
+    _, pdf = _one_card_pdf(tmp_path, paper="a3")
+    card_pt = sheets.CARD_MM * sheets.MM
+    assert f"{card_pt:.3f} {card_pt:.3f} re W n".encode() in pdf
+    assert pdf.count(b"-1 0 0 1 ") == 1      # left
+    assert pdf.count(b"1 0 0 -1 ") == 2      # top, and the corner ("-1 0 0 -1")
+    assert pdf.count(b"-1 0 0 -1 ") == 1     # the corner
+
+
+def test_a3_flags_low_resolution_art_without_dropping_it(tmp_path):
+    result, _ = _one_card_pdf(tmp_path, paper="a3", px=1000)
+    assert result["cards"] == 1
+    assert result["low_res"] == [{"album": "A/B", "px": 1000}]
+
+
+def test_a3_pads_to_whole_pages(tmp_path):
+    """220 cards is 27.5 pages of eight, so 28 pages."""
+    import json
+    from PIL import Image
+    from nfc_jukebox.cardart import build_sheets
+    art = tmp_path / "art"
+    art.mkdir()
+    Image.new("RGB", (64, 64)).save(art / "a.jpg", "JPEG")
+    (art / "manifest.json").write_text(json.dumps(
+        {f"A/{i:03}": {"status": "ok", "file": "a.jpg", "width": 1200,
+                       "height": 1200, "score": 1.0} for i in range(220)}))
+    result = build_sheets(str(art), str(tmp_path / "s.pdf"), 0, True, paper="a3")
+    assert (result["cards"], result["pages"]) == (220, 28)

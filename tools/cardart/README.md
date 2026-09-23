@@ -88,7 +88,22 @@ Writes `covers-to-print.pdf` next to the images: **95mm squares, six to an A4
 page**, two columns of three, evenly spaced. The geometry was measured from
 the Affinity Publisher export that produced the existing deck, so new cards
 come out the same size as the ones already in the box — verified against it to
-within 0.3mm.
+within 0.3mm. The art is exactly 95mm with white gaps between cards, and the
+cut marks continue each cut line through those gaps.
+
+`--paper a3` lays out a sheet for a print shop instead:
+
+- A3 portrait, **eight to a page**, two columns of four, the cards touching:
+  a 190 × 380mm block centred with 53.5mm margins left and right, 20mm top
+  and bottom.
+- Each card is still exactly 95mm. The outside of the block carries **3mm of
+  bleed, mirrored**: the cover reflected across the cut line, so no part of
+  it is lost to the bleed. Inner edges have none.
+- Cut marks sit in the margins only, starting 5mm clear of the bleed. Cuts
+  are at x = 53.5, 148.5, 243.5 and y = 20, 115, 210, 305, 400.
+- Anything under **1160px** (98mm at 300dpi) is listed, and printed anyway —
+  nothing is upscaled. A short last page is left blank in the empty cells, so
+  220 cards come out as 28 full pages.
 
 JPEGs are embedded as-is rather than re-encoded, so nothing is resampled on
 the way through. Artwork that isn't square is centre-cropped with a clipping

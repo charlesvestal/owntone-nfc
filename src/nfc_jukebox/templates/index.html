@@ -118,12 +118,18 @@
 <section id="panel-artwork" hidden>
 <h2>Card artwork</h2>
 <p class="muted">Finds cover art for albums that have no card yet, then lays it
-  out as A4 sheets of 95&nbsp;mm squares &mdash; the same size as the cards
-  already in the box.</p>
+  out as sheets of 95&nbsp;mm squares &mdash; the same size as the cards
+  already in the box. A4 has white gaps between the cards, for cutting at
+  home; A3 puts eight touching cards with bleed on a page, for a print
+  shop.</p>
 <p class="muted">A search can return a confidently wrong album, so anything
   doubtful is flagged. Look before you print.</p>
 <button id="collect" onclick="collect()">Collect artwork</button>
 <button id="sheets" onclick="makeSheets()">Make print sheets</button>
+<select id="paper" aria-label="Paper">
+  <option value="a4">A4, 6 a page</option>
+  <option value="a3">A3, 8 a page (print shop)</option>
+</select>
 <label><input type="checkbox" id="refetch"> start again from scratch</label>
 <label><input type="checkbox" id="showskipped" onchange="loadArtworkSafely()">
   show skipped</label>
@@ -677,16 +683,26 @@ async function makeSheets() {
   document.getElementById('artmsg').textContent = 'Building\u2026';
   const r = await fetch('/api/artwork/sheets',
     {method: 'POST', headers: {'Content-Type': 'application/json'},
-     body: JSON.stringify({all: includeAssigned()})});
+     body: JSON.stringify({all: includeAssigned(),
+                           paper: document.getElementById('paper').value})});
   const body = await r.json();
   if (!r.ok) { document.getElementById('artmsg').textContent = body.error; return; }
   const msg = document.getElementById('artmsg');
+  const paper = (body.paper || 'a4').toUpperCase();
   msg.replaceChildren(
-    document.createTextNode(`${body.cards} card(s) on ${body.pages} A4 page(s). `));
+    document.createTextNode(`${body.cards} card(s) on ${body.pages} ${paper} page(s). `));
   const link = el('a', 'Download the PDF');
-  link.href = '/artwork-file/cards-to-print.pdf';
-  link.download = 'cards-to-print.pdf';
+  // Every build writes the same file name, so switching paper would otherwise
+  // hand back the browser's cached copy of the last one.
+  link.href = `/artwork-file/cards-to-print.pdf?t=${Date.now()}`;
+  link.download = `cards-to-print-${body.paper || 'a4'}.pdf`;
   msg.append(link);
+  if (body.low_res && body.low_res.length) {
+    msg.append(document.createTextNode(
+      ` ${body.low_res.length} below the resolution this sheet wants ` +
+      `(printed anyway): ` +
+      body.low_res.map(r => `${r.album} (${r.px}px)`).join(', ')));
+  }
 }
 
 </script>

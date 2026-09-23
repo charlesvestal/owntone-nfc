@@ -589,8 +589,11 @@ def create_app(config, controller, store, owntone=None, power=None,
 
     @app.post("/api/artwork/sheets")
     def artwork_sheets():
-        from .cardart import build_sheets
+        from .cardart import LAYOUTS, build_sheets
         payload = request.get_json(silent=True) or {}
+        paper = payload.get("paper") or "a4"
+        if paper not in LAYOUTS:
+            return jsonify(error=f"Unknown paper {paper!r}."), 400
         out_dir = _artwork_dir()
         target = os.path.join(out_dir, "cards-to-print.pdf")
         # Print exactly what the grid is showing. Left to itself build_sheets
@@ -604,7 +607,7 @@ def create_app(config, controller, store, owntone=None, power=None,
             result = build_sheets(out_dir, target,
                                   int(payload.get("min_px") or 0),
                                   bool(payload.get("include_suspect")),
-                                  only=only)
+                                  only=only, paper=paper)
         except FileNotFoundError:
             return jsonify(error="No artwork collected yet."), 409
         except Exception as exc:                        # noqa: BLE001

@@ -1233,7 +1233,8 @@ def test_sheets_only_print_the_albums_on_screen(tmp_path):
     import nfc_jukebox.web as web_module
     calls = {}
 
-    def fake_sheets(directory, out_path, min_px, include_suspect, only=None):
+    def fake_sheets(directory, out_path, min_px, include_suspect, only=None,
+                    paper="a4"):
         calls["only"] = only
         return {"cards": 1, "pages": 1, "skipped": []}
 
@@ -1246,6 +1247,30 @@ def test_sheets_only_print_the_albums_on_screen(tmp_path):
         assert calls["only"] == {"Fleetwood Mac/Rumours"}
         client.post("/api/artwork/sheets", json={"all": True})
         assert calls["only"] is None
+    finally:
+        cardart.build_sheets = original
+
+
+def test_sheets_take_the_paper_and_refuse_one_they_do_not_know(tmp_path):
+    client, _ = _studio(tmp_path, manifest={
+        "Miles Davis/Kind of Blue": {"status": "ok", "file": "a.jpg",
+                                     "width": 3000, "height": 3000}})
+    import nfc_jukebox.cardart as cardart
+    calls = {}
+
+    def fake_sheets(directory, out_path, min_px, include_suspect, only=None,
+                    paper="a4"):
+        calls["paper"] = paper
+        return {"cards": 1, "pages": 1, "skipped": [], "low_res": [],
+                "paper": paper}
+
+    original = cardart.build_sheets
+    cardart.build_sheets = fake_sheets
+    try:
+        client.post("/api/artwork/sheets", json={"paper": "a3"})
+        assert calls["paper"] == "a3"
+        assert client.post("/api/artwork/sheets",
+                           json={"paper": "letter"}).status_code == 400
     finally:
         cardart.build_sheets = original
 
