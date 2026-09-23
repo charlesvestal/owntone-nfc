@@ -1262,6 +1262,7 @@ def test_sheets_take_the_paper_and_refuse_one_they_do_not_know(tmp_path):
                     paper="a4", pad_to=0):
         calls["paper"] = paper
         calls["pad_to"] = pad_to
+        calls["include_suspect"] = include_suspect
         return {"cards": 1, "pages": 1, "skipped": [], "low_res": [],
                 "paper": paper}
 
@@ -1270,6 +1271,8 @@ def test_sheets_take_the_paper_and_refuse_one_they_do_not_know(tmp_path):
     try:
         client.post("/api/artwork/sheets", json={"paper": "a3"})
         assert calls["paper"] == "a3"
+        # Nothing on the page can confirm a questionable match, so they print.
+        assert calls["include_suspect"] is True
         assert client.post("/api/artwork/sheets",
                            json={"paper": "letter"}).status_code == 400
         client.post("/api/artwork/sheets", json={"paper": "card", "pad_to": 220})

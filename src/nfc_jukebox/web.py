@@ -612,7 +612,11 @@ def create_app(config, controller, store, owntone=None, power=None,
         try:
             result = build_sheets(out_dir, target,
                                   int(payload.get("min_px") or 0),
-                                  bool(payload.get("include_suspect")),
+                                  # Questionable matches print. The grid flags
+                                  # them for a look, and there is no way to
+                                  # mark one as checked, so leaving them out
+                                  # silently dropped cards that were fine.
+                                  bool(payload.get("include_suspect", True)),
                                   only=only, paper=paper,
                                   pad_to=pad_to)
         except FileNotFoundError:
