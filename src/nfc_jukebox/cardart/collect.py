@@ -178,6 +178,24 @@ def collect(args, album_path, overrides):
         album = override.get("album", album)
     searched = (artist, album)
 
+    if override.get("file"):
+        # An image uploaded from the admin page, kept in the artwork
+        # directory. It is exactly what was asked for, so it is not searched
+        # around or second-guessed.
+        path = os.path.join(getattr(args, "out_dir", "") or "", override["file"])
+        try:
+            with open(path, "rb") as handle:
+                data = handle.read()
+        except OSError:
+            print(f"      ! uploaded image is gone: {path}")
+            return [], override
+        size = image_size(data)
+        if size:
+            return [{"data": data, "width": size[0], "height": size[1],
+                     "source": f"upload:{os.path.basename(path)}",
+                     "score": 1.0}], override
+        return [], override
+
     if override.get("url"):
         data = http_get(override["url"])
         size = image_size(data)
@@ -261,9 +279,12 @@ class _Args:
     """The handful of settings collect() reads, so the web app and the CLI can
     both call it without one of them inventing an argparse namespace."""
 
-    def __init__(self, library_root: str, min_px: int = DEFAULT_MIN_PX):
+    def __init__(self, library_root: str, min_px: int = DEFAULT_MIN_PX,
+                 out_dir: str = ""):
         self.library_root = library_root
         self.min_px = min_px
+        # Where uploaded images live; overrides name them relative to it.
+        self.out_dir = out_dir
 
 
 def collect_album(album_path: str, out_dir: str, library_root: str,
@@ -273,7 +294,8 @@ def collect_album(album_path: str, out_dir: str, library_root: str,
     One album at a time on purpose: the admin page reports progress as it goes,
     and a run over a whole library takes minutes.
     """
-    ranked, override = collect(_Args(library_root, min_px), album_path, overrides)
+    ranked, override = collect(_Args(library_root, min_px, out_dir),
+                               album_path, overrides)
 
     if override.get("skip"):
         return {"status": "skipped", "reason": override["skip"]}

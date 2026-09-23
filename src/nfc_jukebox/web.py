@@ -4,6 +4,7 @@ Deliberately tiny: OwnTone's UI on :3689 owns everything player-related.
 """
 from __future__ import annotations
 
+import io
 import logging
 import os
 import subprocess
@@ -20,6 +21,10 @@ from .cardart import collect as cardart_collect
 from .cards import Card, duplicate_paths, name_for_path, normalise_uid
 
 log = logging.getLogger(__name__)
+
+# A phone photo of a sleeve is a few MB; a lossless scan can be tens. Past this
+# it is almost certainly the wrong file.
+UPLOAD_LIMIT_BYTES = 40 * 2**20
 
 
 def _run_power(action: str) -> None:
@@ -557,7 +562,9 @@ def create_app(config, controller, store, owntone=None, power=None,
         else:
             overrides.pop(album, None)
         cardart_collect.save_overrides(out_dir, overrides)
+        return _apply_override(album, out_dir, overrides)
 
+    def _apply_override(album, out_dir, overrides):
         # Apply it now rather than recording the intent and waiting for a
         # Collect run. Saving without collecting leaves the page showing the
         # old art, which reads as the override having failed.
@@ -586,6 +593,55 @@ def create_app(config, controller, store, owntone=None, power=None,
             error = "Saved, but nothing could be fetched for that."
         return jsonify(album=album, override=overrides.get(album),
                        entry=collected, collected=True, error=error)
+
+    @app.post("/api/artwork/upload")
+    def artwork_upload():
+        """Use an image from this computer for an album.
+
+        For when no search finds the right sleeve and there is no URL to paste
+        either: a photo of the record, a scan, a file from somewhere else. It
+        becomes that album's override, like a pasted URL, so it is trusted as
+        it stands and a later Collect leaves it alone.
+        """
+        from .cardart.artlib import image_size, slug
+        album = request.form.get("album")
+        upload = request.files.get("image")
+        if not album:
+            return jsonify(error="Which album?"), 400
+        if upload is None:
+            return jsonify(error="No image attached."), 400
+        data = upload.read(UPLOAD_LIMIT_BYTES + 1)
+        if len(data) > UPLOAD_LIMIT_BYTES:
+            return jsonify(error="That image is too big "
+                                 f"(over {UPLOAD_LIMIT_BYTES // 2**20}MB)."), 413
+
+        extension = {b"\xff\xd8": ".jpg", b"\x89P": ".png"}.get(data[:2])
+        if extension is None or image_size(data) is None:
+            # WebP, GIF, TIFF and the like: turn them into a JPEG here rather
+            # than teach every later step another format.
+            try:
+                from PIL import Image
+                with Image.open(io.BytesIO(data)) as image:
+                    buffer = io.BytesIO()
+                    image.convert("RGB").save(buffer, format="JPEG", quality=95)
+                data, extension = buffer.getvalue(), ".jpg"
+            except Exception:                           # noqa: BLE001
+                return jsonify(error="That file is not an image this can "
+                                     "read. JPEG or PNG works."), 400
+
+        out_dir = _artwork_dir()
+        uploads = os.path.join(out_dir, "uploads")
+        os.makedirs(uploads, exist_ok=True)
+        name = f"{slug(album)}{extension}"
+        partial = os.path.join(uploads, name + ".part")
+        with open(partial, "wb") as handle:
+            handle.write(data)
+        os.replace(partial, os.path.join(uploads, name))
+
+        overrides = cardart_collect.load_overrides(out_dir)
+        overrides[album] = {"file": f"uploads/{name}"}
+        cardart_collect.save_overrides(out_dir, overrides)
+        return _apply_override(album, out_dir, overrides)
 
     @app.post("/api/artwork/sheets")
     def artwork_sheets():

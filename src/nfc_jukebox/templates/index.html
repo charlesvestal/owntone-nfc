@@ -545,6 +545,18 @@ function artFigure(a, current) {
   const fix = el('button', 'Fix\u2026');
   fix.addEventListener('click', () => fixArtwork(a));
   cap.append(fix);
+  // A file picker behind a button: the input itself cannot be styled to sit
+  // beside "Fix" without looking like a form field.
+  const upload = el('button', 'Upload\u2026');
+  const picker = document.createElement('input');
+  picker.type = 'file';
+  picker.accept = 'image/*';
+  picker.hidden = true;
+  picker.addEventListener('change', () => {
+    if (picker.files.length) uploadArtwork(a, picker.files[0]);
+  });
+  upload.addEventListener('click', () => picker.click());
+  cap.append(upload, picker);
   fig.append(cap);
   return fig;
 }
@@ -650,6 +662,7 @@ async function fixArtwork(a) {
   // that are almost never used. Empty clears whatever override was set.
   const current = a.override
     ? (a.override.skip ? 'skip: ' + a.override.skip
+       : a.override.file ? ''
        : a.override.url ? a.override.url
        : (a.override.artist || '') + ' - ' + (a.override.album || ''))
     : '';
@@ -682,6 +695,19 @@ async function fixArtwork(a) {
   // Redraw from the manifest rather than from the pasted URL: the tile has to
   // show what will print, and loadArtwork picks up the new mtime that busts
   // the cached copy of the old image.
+  loadArtworkSafely();
+}
+
+async function uploadArtwork(a, file) {
+  const msg = document.getElementById('artmsg');
+  msg.textContent = `Uploading ${file.name}\u2026`;
+  const form = new FormData();
+  form.append('album', a.album);
+  form.append('image', file);
+  const r = await fetch('/api/artwork/upload', {method: 'POST', body: form});
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { msg.textContent = body.error || 'Could not upload that.'; return; }
+  msg.textContent = body.error ? body.error : `Using ${file.name} for ${a.album}.`;
   loadArtworkSafely();
 }
 

@@ -1420,3 +1420,66 @@ def test_the_page_stops_polling_when_nobody_is_looking(app_ctx):
     assert "visibilitychange" in page
     assert "clearInterval" in page
     assert "tick(); setInterval(tick, 1000);" not in page
+
+
+# --- uploading artwork -------------------------------------------------------
+
+
+def _image_bytes(fmt, size=(1500, 1500), colour=(10, 120, 200)):
+    import io
+    from PIL import Image
+    buffer = io.BytesIO()
+    Image.new("RGB", size, colour).save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
+def _upload(client, album, data, name="cover.png"):
+    import io
+    return client.post("/api/artwork/upload",
+                       data={"album": album, "image": (io.BytesIO(data), name)},
+                       content_type="multipart/form-data")
+
+
+def test_an_uploaded_image_becomes_the_albums_artwork(tmp_path):
+    from nfc_jukebox.cardart import collect_album
+    client, art = _studio(tmp_path, collector=collect_album)
+    r = _upload(client, "Miles Davis/Kind of Blue", _image_bytes("PNG"))
+    assert r.status_code == 200, r.get_json()
+    entry = r.get_json()["entry"]
+    assert entry["status"] == "ok"
+    assert entry["source"].startswith("upload:")
+    assert (entry["width"], entry["height"]) == (1500, 1500)
+    assert entry["override"] is True           # trusted, not "to check"
+    assert (art / entry["file"]).exists()
+
+    # And it survives a later collect, which must not search over it.
+    overrides = json.loads((art / "overrides.json").read_text())
+    again = collect_album("Miles Davis/Kind of Blue", str(art), str(tmp_path),
+                          overrides)
+    assert again["source"] == entry["source"]
+
+
+def test_an_upload_in_another_format_is_turned_into_a_jpeg(tmp_path):
+    from nfc_jukebox.cardart import collect_album
+    client, art = _studio(tmp_path, collector=collect_album)
+    r = _upload(client, "Miles Davis/Kind of Blue", _image_bytes("WEBP"),
+                "cover.webp")
+    assert r.status_code == 200, r.get_json()
+    assert [p.suffix for p in (art / "uploads").iterdir()] == [".jpg"]
+
+
+def test_an_upload_that_is_not_an_image_is_refused(tmp_path):
+    client, art = _studio(tmp_path)
+    r = _upload(client, "Miles Davis/Kind of Blue", b"not an image at all",
+                "notes.txt")
+    assert r.status_code == 400
+    assert not (art / "overrides.json").exists()
+
+
+def test_an_upload_needs_an_album_and_a_file(tmp_path):
+    client, _ = _studio(tmp_path)
+    assert client.post("/api/artwork/upload", data={},
+                       content_type="multipart/form-data").status_code == 400
+    assert client.post("/api/artwork/upload",
+                       data={"album": "Miles Davis/Kind of Blue"},
+                       content_type="multipart/form-data").status_code == 400
