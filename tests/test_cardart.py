@@ -286,24 +286,29 @@ def test_a_manifest_is_never_readable_half_written(tmp_path):
     assert not errors, f"read a half-written manifest: {errors[0]}"
 
 
-# --- bleed and trim marks ---------------------------------------------------
+# --- card size and trim marks -----------------------------------------------
 #
-# A printer cutting to 95mm needs the artwork to run past the cut line, or a
-# fraction of a millimetre of drift leaves a white hairline down one edge. The
-# art is centre-cropped to the square anyway, so bleed costs nothing.
+# The art is exactly 95mm with white gaps between cards; the marks continue
+# each cut line through the gaps and never touch the artwork.
 
 
-def test_bleed_cannot_make_neighbouring_cards_overlap():
-    """The vertical gap is only 3mm, so bleed is capped at half of it. Any
-    more and one album's artwork prints over the next one's."""
-    from nfc_jukebox.cardart import sheets
-    assert sheets.BLEED_MM * 2 <= min(sheets.GAP_X, sheets.GAP_Y)
-
-
-def test_trim_marks_stay_out_of_the_bleed():
+def test_trim_marks_stay_out_of_the_artwork():
     """A mark drawn over the artwork would be cut into the card."""
+    import re
     from nfc_jukebox.cardart import sheets
-    assert sheets.MARK_LEN_MM <= sheets.GAP_Y - sheets.BLEED_MM
+    cards = []
+    for slot in range(sheets.COLS * sheets.ROWS):
+        col, row = slot % sheets.COLS, slot // sheets.COLS
+        x = sheets.GAP_X + col * (sheets.CARD_MM + sheets.GAP_X)
+        y = sheets.PAGE_H_MM - (sheets.GAP_Y + row * (sheets.CARD_MM + sheets.GAP_Y)
+                                + sheets.CARD_MM)
+        cards.append((x, y, x + sheets.CARD_MM, y + sheets.CARD_MM))
+    for line in sheets._trim_marks(len(cards))[1:-1]:
+        x0, y0, x1, y1 = (float(v) / sheets.MM for v in re.findall(r"[\d.]+", line))
+        for t in (0, 0.5, 1):
+            px, py = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
+            for cx0, cy0, cx1, cy1 in cards:
+                assert not (cx0 < px < cx1 and cy0 < py < cy1), line
 
 
 def _one_card_pdf(tmp_path):
@@ -330,11 +335,11 @@ def test_a_sheet_carries_trim_marks(tmp_path):
     assert b" S\n" in pdf or b" S " in pdf or pdf.count(b"\nS\n") > 0
 
 
-def test_the_artwork_is_drawn_past_the_cut_line(tmp_path):
-    """The clip box has to be the bleed box, not the 95mm trim box."""
+def test_the_artwork_is_drawn_at_exactly_the_card_size(tmp_path):
+    """No bleed: scaling the art past the cut line trims text off its edges."""
     import pathlib
     globals()["pathlib"] = pathlib
     from nfc_jukebox.cardart import sheets
     _, pdf = _one_card_pdf(tmp_path)
-    bleed_pt = (sheets.CARD_MM + 2 * sheets.BLEED_MM) * sheets.MM
-    assert f"{bleed_pt:.3f}".encode() in pdf, "no clip box at the bleed size"
+    card_pt = sheets.CARD_MM * sheets.MM
+    assert f"{card_pt:.3f} {card_pt:.3f} re W n".encode() in pdf

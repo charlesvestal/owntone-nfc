@@ -28,21 +28,17 @@ COLS, ROWS = 2, 3
 GAP_X = (PAGE_W_MM - COLS * CARD_MM) / (COLS + 1)
 GAP_Y = (PAGE_H_MM - ROWS * CARD_MM) / (ROWS + 1)
 
-# How far the artwork runs past the cut line. A guillotine drifts a fraction of
-# a millimetre, and without bleed that drift shows as a white hairline down one
-# edge of the card. The art is centre-cropped to the square anyway, so the
-# extra is free.
+# The artwork is drawn at exactly the card size: no bleed. Bleed means scaling
+# the art past the cut line, and at 95mm that trims 1.5mm off every edge --
+# enough to clip band names set tight to the edge -- while also closing up the
+# white gaps between cards. A white gap is the margin; the cut goes along the
+# edge of the art.
 #
-# Capped by the layout rather than chosen: the vertical gap is 3mm, so 1.5mm is
-# the most either neighbour can take before one album's artwork prints over the
-# next one's. Printers usually ask for 3mm; this sheet cannot give it without
-# dropping to four cards a page, and 1.5mm is enough for a guillotine.
-BLEED_MM = min(GAP_X, GAP_Y) / 2
-
-# Ticks at the sheet edges rather than corner crop marks: at 1.5mm of clear
-# margin there is no room for the usual offset-and-length pair, and a guillotine
-# operator lines up on the sheet edge regardless.
-MARK_LEN_MM = 1.4
+# Crop marks are the cut lines continued through that white space, stopping
+# MARK_CLEAR_MM short of any artwork so a mark is never cut into a card. They
+# sit between cards rather than at the paper edge, where most printers cannot
+# print.
+MARK_CLEAR_MM = 0.5
 MARK_WEIGHT_PT = 0.25
 
 _SOF = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
@@ -144,31 +140,37 @@ def cover_placement(img_w: int, img_h: int, box: float):
 
 
 def _trim_marks(count: int) -> list[str]:
-    """Ticks in the sheet margins, one pair per cut line.
+    """Cut lines drawn only through the white space around the cards.
 
     Only for the rows actually used: a half-full last page should not invite a
     cut through empty paper.
     """
     rows_used = (count + COLS - 1) // COLS
-    xs, ys = [], []
-    for col in range(COLS):
-        left = GAP_X + col * (CARD_MM + GAP_X)
-        xs += [left, left + CARD_MM]
-    for row in range(rows_used):
-        top = PAGE_H_MM - (GAP_Y + row * (CARD_MM + GAP_Y))
-        ys += [top, top - CARD_MM]
+    lefts = [GAP_X + col * (CARD_MM + GAP_X) for col in range(COLS)]
+    tops = [PAGE_H_MM - (GAP_Y + row * (CARD_MM + GAP_Y))
+            for row in range(rows_used)]
+    xs = [x for left in lefts for x in (left, left + CARD_MM)]
+    ys = [y for top in tops for y in (top, top - CARD_MM)]
 
+    # The white bands the marks run through, as (start, end) in page mm.
+    # Across: left margin, gutters, right margin. Down: above each used row
+    # and below the last one.
+    across = [(0.0, lefts[0])] + [
+        (left + CARD_MM, nxt) for left, nxt in zip(lefts, lefts[1:])
+    ] + [(lefts[-1] + CARD_MM, PAGE_W_MM)]
+    down = [(top, top + GAP_Y) for top in tops] + [
+        (tops[-1] - CARD_MM - GAP_Y, tops[-1] - CARD_MM)]
+
+    c = MARK_CLEAR_MM
     out = [f"q 0 G {MARK_WEIGHT_PT} w"]
-    for x in xs:                       # vertical cuts: tick top and bottom
-        for y0, y1 in ((0, MARK_LEN_MM),
-                       (PAGE_H_MM - MARK_LEN_MM, PAGE_H_MM)):
-            out.append(f"{x * MM:.3f} {y0 * MM:.3f} m "
-                       f"{x * MM:.3f} {y1 * MM:.3f} l S")
-    for y in ys:                       # horizontal cuts: tick left and right
-        for x0, x1 in ((0, MARK_LEN_MM),
-                       (PAGE_W_MM - MARK_LEN_MM, PAGE_W_MM)):
-            out.append(f"{x0 * MM:.3f} {y * MM:.3f} m "
-                       f"{x1 * MM:.3f} {y * MM:.3f} l S")
+    for x in xs:                       # vertical cuts, through the gaps down
+        for lo, hi in down:
+            out.append(f"{x * MM:.3f} {(lo + c) * MM:.3f} m "
+                       f"{x * MM:.3f} {(hi - c) * MM:.3f} l S")
+    for y in ys:                       # horizontal cuts, through the gaps across
+        for lo, hi in across:
+            out.append(f"{(lo + c) * MM:.3f} {y * MM:.3f} m "
+                       f"{(hi - c) * MM:.3f} {y * MM:.3f} l S")
     out.append("Q")
     return out
 
@@ -200,10 +202,8 @@ def _render(directory: str, chosen: list, out_path: str) -> int:
             x = GAP_X + col * (CARD_MM + GAP_X)
             # PDF's origin is bottom-left; lay out from the top of the page.
             y = PAGE_H_MM - (GAP_Y + row * (CARD_MM + GAP_Y) + CARD_MM)
-            # Paint the bleed box, clip to the bleed box: the card is cut out
-            # of the middle of it at CARD_MM.
-            box = (CARD_MM + 2 * BLEED_MM) * MM
-            bx, by = (x - BLEED_MM) * MM, (y - BLEED_MM) * MM
+            box = CARD_MM * MM
+            bx, by = x * MM, y * MM
             draw_w, draw_h, dx, dy = cover_placement(img_w, img_h, box)
             content.append(
                 f"q {bx:.3f} {by:.3f} {box:.3f} {box:.3f} re W n "
