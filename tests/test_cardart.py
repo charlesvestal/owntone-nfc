@@ -419,3 +419,90 @@ def test_a3_pads_to_whole_pages(tmp_path):
                        "height": 1200, "score": 1.0} for i in range(220)}))
     result = build_sheets(str(art), str(tmp_path / "s.pdf"), 0, True, paper="a3")
     assert (result["cards"], result["pages"]) == (220, 28)
+
+
+# --- one card a page, CMYK PDF/X-1a ------------------------------------------
+
+
+@pytest.fixture
+def pso_profile(tmp_path, monkeypatch):
+    """A stand-in CMYK profile, so the tests never go to eci.org."""
+    from PIL import ImageCms
+    from nfc_jukebox.cardart import cmyk
+    icc = "/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc"
+    if not os.path.exists(icc):
+        pytest.skip("no CMYK profile on this machine to stand in for ECI's")
+    ImageCms.getOpenProfile(icc)
+
+    def fake_ensure(directory):
+        target = os.path.join(directory, cmyk.PROFILE_NAME)
+        if not os.path.exists(target):
+            with open(icc, "rb") as src, open(target, "wb") as dst:
+                dst.write(src.read())
+        return target
+    monkeypatch.setattr(cmyk, "ensure_profile", fake_ensure)
+
+
+def test_card_pages_are_pdfx_with_the_trim_centred(tmp_path, pso_profile):
+    import pathlib
+    import re
+    globals()["pathlib"] = pathlib
+    from nfc_jukebox.cardart import sheets
+    result, pdf = _one_card_pdf(tmp_path, paper="card")
+    assert result["pages"] == 1
+    assert pdf.startswith(b"%PDF-1.3")
+    mm = sheets.MM
+    media = f"[0 0 {101 * mm:.4f} {101 * mm:.4f}]"
+    trim = f"[{3 * mm:.4f} {3 * mm:.4f} {98 * mm:.4f} {98 * mm:.4f}]"
+    assert f"/MediaBox {media} /TrimBox {trim} /BleedBox {media}".encode() in pdf
+    for key in (b"/GTS_PDFXVersion (PDF/X-1:2001)",
+                b"/GTS_PDFXConformance (PDF/X-1a:2001)",
+                b"/OutputConditionIdentifier (FOGRA51)",
+                b"/DestOutputProfile", b"/Trapped /False", b"/ID ["):
+        assert key in pdf, key
+    assert b"/DeviceRGB" not in pdf
+    assert b"/DeviceCMYK" in pdf
+    # No marks: nothing is stroked.
+    assert not re.search(rb" l S\b", pdf)
+
+
+def test_card_pages_mirror_all_four_edges(tmp_path, pso_profile):
+    import pathlib
+    globals()["pathlib"] = pathlib
+    from nfc_jukebox.cardart import sheets
+    _, pdf = _one_card_pdf(tmp_path, paper="card")
+    card_pt = sheets.CARD_MM * sheets.MM
+    assert f"{card_pt:.3f} {card_pt:.3f} re W n".encode() in pdf
+    assert pdf.count(b"-1 0 0 1 ") == 2       # left, right
+    assert pdf.count(b"-1 0 0 -1 ") == 4      # the corners
+    assert pdf.count(b" 1 0 0 -1 ") == 2      # top, bottom
+
+
+def test_cmyk_conversion_keeps_colours_the_right_way_round(tmp_path, pso_profile):
+    """A CMYK JPEG read without its inversion undone prints as a negative."""
+    import pathlib
+    import shutil
+    import subprocess
+    globals()["pathlib"] = pathlib
+    if not shutil.which("pdftoppm"):
+        pytest.skip("needs poppler's pdftoppm to render the page")
+    from PIL import Image
+    result, _ = _one_card_pdf(tmp_path, paper="card", px=1200)
+    subprocess.run(["pdftoppm", "-r", "30", "-png", str(tmp_path / "sheet.pdf"),
+                    str(tmp_path / "r")], check=True)
+    rendered = Image.open(next(tmp_path.glob("r*.png"))).convert("RGB")
+    r, g, b = rendered.getpixel((rendered.width // 2, rendered.height // 2))
+    # The source is (30, 60, 90): dark, and bluer than it is red.
+    assert r + g + b < 3 * 140 and b > r
+
+
+def test_cmyk_brings_huge_covers_down_and_never_scales_up(tmp_path, pso_profile):
+    from PIL import Image
+    from nfc_jukebox.cardart import cmyk
+    from nfc_jukebox.cardart.sheets import jpeg_info
+    for px in (3000, 800):
+        Image.new("RGB", (px, px), (200, 20, 20)).save(tmp_path / f"{px}.jpg")
+    converter = cmyk.Converter(str(tmp_path))
+    assert jpeg_info(converter.jpeg(str(tmp_path / "3000.jpg")))[:3] == (
+        cmyk.MAX_PX, cmyk.MAX_PX, 4)
+    assert jpeg_info(converter.jpeg(str(tmp_path / "800.jpg")))[:2] == (800, 800)

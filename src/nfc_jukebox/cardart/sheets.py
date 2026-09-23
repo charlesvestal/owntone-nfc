@@ -8,6 +8,13 @@ sheets are on offer:
       gaps between the cards and no bleed: for printing and cutting at home.
   a3  Eight to a page in two columns of four, the cards touching, with 3mm of
       bleed around the outside of the block. For a print shop.
+  card
+      One card to a 101mm page: the 95mm cover on the TrimBox with 3mm of
+      bleed all round, in CMYK, as PDF/X-1a. For a print shop that cuts each
+      card from its own page.
+
+Bleed is always the cover mirrored outward across the cut line, so each card
+is the whole cover at exactly 95mm and nothing is lost to the bleed.
 
 JPEGs are embedded as-is rather than re-encoded -- a PDF can carry JPEG data
 directly -- so nothing is resampled on the way through. Artwork that is not
@@ -16,10 +23,13 @@ at all: the picture is scaled to cover the square and the square is painted.
 """
 from __future__ import annotations
 
+import datetime
+import hashlib
 import io
 import json
 import os
 import struct
+import zlib
 from dataclasses import dataclass
 
 from .artlib import MATCH_FLOOR
@@ -51,6 +61,9 @@ class Layout:
     # Source images narrower than this are listed as low resolution. Flagged,
     # not dropped, and never upscaled.
     min_px: int = 0
+    # PDF/X-1a: CMYK only, TrimBox and BleedBox on every page, an output
+    # intent, and no marks -- the printer's imposition adds its own.
+    pdfx: bool = False
 
     @property
     def per_page(self) -> int:
@@ -86,6 +99,11 @@ LAYOUTS = {
                  margin_y=(420.0 - 4 * CARD_MM) / 2,
                  gutter_x=0.0, gutter_y=0.0,
                  bleed_mm=3.0, min_px=1160),
+    # The page is the bleed box. 95mm at 300dpi is 1122px; the bleed is
+    # mirrored from the card, so it asks nothing more of the source.
+    "card": Layout("card", 101.0, 101.0, 1, 1,
+                   margin_x=3.0, margin_y=3.0, gutter_x=0.0, gutter_y=0.0,
+                   bleed_mm=3.0, min_px=1122, pdfx=True),
 }
 
 # The A4 sheet's numbers, kept at module level for the command-line wrapper.
@@ -169,8 +187,9 @@ class Pdf:
         self.objects.append(body)
         return len(self.objects)          # 1-based object numbers
 
-    def write(self, path: str, page_ids: list[int], pages_id: int, root_id: int):
-        out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    def write(self, path: str, page_ids: list[int], pages_id: int, root_id: int,
+              version: str = "1.4", info_id: int | None = None):
+        out = bytearray(f"%PDF-{version}\n".encode() + b"%\xe2\xe3\xcf\xd3\n")
         offsets = [0] * (len(self.objects) + 1)
         for number, body in enumerate(self.objects, start=1):
             offsets[number] = len(out)
@@ -180,7 +199,12 @@ class Pdf:
         out += b"0000000000 65535 f \n"
         for number in range(1, len(self.objects) + 1):
             out += f"{offsets[number]:010d} 00000 n \n".encode()
-        out += (f"trailer\n<< /Size {len(self.objects) + 1} /Root {root_id} 0 R >>\n"
+        trailer = f"/Size {len(self.objects) + 1} /Root {root_id} 0 R"
+        if info_id is not None:
+            # PDF/X wants a file identifier; any stable-enough bytes will do.
+            ident = hashlib.md5(bytes(out[:4096]) + str(xref).encode()).hexdigest()
+            trailer += f" /Info {info_id} 0 R /ID [<{ident}> <{ident}>]"
+        out += (f"trailer\n<< {trailer} >>\n"
                 f"startxref\n{xref}\n%%EOF\n").encode()
         with open(path, "wb") as handle:
             handle.write(out)
@@ -316,16 +340,27 @@ def _paint(name: str, img_w: int, img_h: int, x: float, y: float,
 def _render(directory: str, chosen: list, out_path: str,
             layout: Layout) -> int:
     pdf = Pdf()
+    converter = None
+    if layout.pdfx:
+        from .cmyk import Converter
+        converter = Converter(directory)
     image_ids, names = [], []
     for index, (album_path, entry) in enumerate(chosen):
-        data = as_jpeg(os.path.join(directory, entry['file']))
+        source = os.path.join(directory, entry['file'])
+        data = converter.jpeg(source) if converter else as_jpeg(source)
         width, height, components = jpeg_info(data)
         colour = {1: "/DeviceGray", 3: "/DeviceRGB", 4: "/DeviceCMYK"}.get(components)
+        if converter and components != 4:
+            colour = None
         if colour is None:
             print(f"  ! unsupported colour ({components} components): {album_path}")
             continue
+        # Pillow writes CMYK JPEGs the way Photoshop does, with the Adobe
+        # marker and the channels inverted; the Decode array undoes that.
+        decode = (" /Decode [1 0 1 0 1 0 1 0]"
+                  if components == 4 and _adobe_inverted(data) else "")
         header = (f"<< /Type /XObject /Subtype /Image /Width {width} "
-                  f"/Height {height} /ColorSpace {colour} /BitsPerComponent 8 "
+                  f"/Height {height} /ColorSpace {colour}{decode} /BitsPerComponent 8 "
                   f"/Filter /DCTDecode /Length {len(data)} >>\nstream\n").encode()
         image_ids.append(pdf.add(header + data + b"\nendstream"))
         names.append((f"Im{index}", width, height))
@@ -341,7 +376,8 @@ def _render(directory: str, chosen: list, out_path: str,
         for slot, (image_id, (name, img_w, img_h)) in enumerate(batch):
             x, y = layout.cell(slot)
             content.extend(_paint(name, img_w, img_h, x, y, layout, slot))
-        content.extend(_trim_marks(len(batch), layout))
+        if not layout.pdfx:
+            content.extend(_trim_marks(len(batch), layout))
         stream = "\n".join(content).encode()
         content_ids.append(pdf.add(
             f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"))
@@ -349,18 +385,69 @@ def _render(directory: str, chosen: list, out_path: str,
                              for image_id, (name, _, _) in batch)
         resource_ids.append(pdf.add(f"<< /XObject << {resources} >> >>".encode()))
 
+    media = f"[0 0 {layout.page_w * MM:.4f} {layout.page_h * MM:.4f}]"
+    boxes = ""
+    if layout.pdfx:
+        # The block of cards, exactly: for one card, its 95mm square.
+        left, bottom = layout.cell(layout.per_page - layout.cols)
+        right = layout.cell(layout.cols - 1)[0] + CARD_MM
+        top = layout.cell(0)[1] + CARD_MM
+        boxes = (f" /TrimBox [{left * MM:.4f} {bottom * MM:.4f} "
+                 f"{right * MM:.4f} {top * MM:.4f}] /BleedBox {media}")
+
     pages_id = len(pdf.objects) + len(content_ids) + 1
     for content_id, resource_id in zip(content_ids, resource_ids):
         page_ids.append(pdf.add(
-            f"<< /Type /Page /Parent {pages_id} 0 R "
-            f"/MediaBox [0 0 {layout.page_w * MM:.4f} {layout.page_h * MM:.4f}] "
+            f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox {media}{boxes} "
             f"/Resources {resource_id} 0 R /Contents {content_id} 0 R >>".encode()))
     pages_id = pdf.add(
         (f"<< /Type /Pages /Count {len(page_ids)} /Kids ["
          + " ".join(f"{i} 0 R" for i in page_ids) + "] >>").encode())
-    root_id = pdf.add(f"<< /Type /Catalog /Pages {pages_id} 0 R >>".encode())
-    pdf.write(out_path, page_ids, pages_id, root_id)
+
+    if not layout.pdfx:
+        root_id = pdf.add(f"<< /Type /Catalog /Pages {pages_id} 0 R >>".encode())
+        pdf.write(out_path, page_ids, pages_id, root_id)
+        return len(page_ids)
+
+    from . import cmyk
+    profile = zlib.compress(converter.profile_bytes)
+    profile_id = pdf.add(
+        f"<< /N 4 /Filter /FlateDecode /Length {len(profile)} >>\nstream\n".encode()
+        + profile + b"\nendstream")
+    intent_id = pdf.add(
+        (f"<< /Type /OutputIntent /S /GTS_PDFX "
+         f"/OutputConditionIdentifier ({cmyk.OUTPUT_CONDITION}) "
+         f"/OutputCondition ({cmyk.OUTPUT_CONDITION_INFO}) "
+         f"/Info ({cmyk.OUTPUT_CONDITION_INFO}) "
+         f"/RegistryName (http://www.color.org) "
+         f"/DestOutputProfile {profile_id} 0 R >>").encode())
+    root_id = pdf.add(
+        (f"<< /Type /Catalog /Pages {pages_id} 0 R "
+         f"/OutputIntents [{intent_id} 0 R] >>").encode())
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("D:%Y%m%d%H%M%SZ")
+    info_id = pdf.add(
+        (f"<< /Title (Record cards) /Creator (nfc-jukebox) "
+         f"/Producer (nfc-jukebox) /CreationDate ({now}) /ModDate ({now}) "
+         f"/Trapped /False /GTS_PDFXVersion (PDF/X-1:2001) "
+         f"/GTS_PDFXConformance (PDF/X-1a:2001) >>").encode())
+    # PDF/X-1a:2001 is defined on PDF 1.3, and nothing here needs later.
+    pdf.write(out_path, page_ids, pages_id, root_id, version="1.3",
+              info_id=info_id)
     return len(page_ids)
+
+
+def _adobe_inverted(data: bytes) -> bool:
+    """Does this JPEG carry an Adobe APP14 marker (so CMYK is inverted)?"""
+    i = 2
+    while i + 4 < len(data) and data[i] == 0xFF:
+        marker = data[i + 1]
+        if marker == 0xEE and data[i + 4:i + 9] == b"Adobe":
+            return True
+        if marker == 0xDA:                 # start of scan: headers are over
+            return False
+        (seglen,) = struct.unpack(">H", data[i + 2:i + 4])
+        i += 2 + seglen
+    return False
 
 
 def build_sheets(directory: str, out_path: str, min_px: int = 0,

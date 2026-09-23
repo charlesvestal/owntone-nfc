@@ -28,7 +28,8 @@ def main() -> int:
     parser.add_argument("--include-suspect", action="store_true")
     parser.add_argument("--paper", choices=sorted(LAYOUTS), default="a4",
                         help="a4: 6 a page with gaps, for home; "
-                             "a3: 8 touching with bleed, for a print shop")
+                             "a3: 8 touching with bleed, for a print shop; "
+                             "card: one a page, CMYK PDF/X-1a, for a print shop")
     args = parser.parse_args()
 
     out = args.out or os.path.join(args.dir, "covers-to-print.pdf")

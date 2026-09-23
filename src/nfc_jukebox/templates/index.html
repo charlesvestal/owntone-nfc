@@ -121,7 +121,9 @@
   out as sheets of 95&nbsp;mm squares &mdash; the same size as the cards
   already in the box. A4 has white gaps between the cards, for cutting at
   home; A3 puts eight touching cards with bleed on a page, for a print
-  shop.</p>
+  shop; one card a page is a CMYK PDF/X-1a file with bleed and no marks,
+  also for a print shop. The first CMYK build converts every cover and can
+  take a few minutes.</p>
 <p class="muted">A search can return a confidently wrong album, so anything
   doubtful is flagged. Look before you print.</p>
 <button id="collect" onclick="collect()">Collect artwork</button>
@@ -129,6 +131,7 @@
 <select id="paper" aria-label="Paper">
   <option value="a4">A4, 6 a page</option>
   <option value="a3">A3, 8 a page (print shop)</option>
+  <option value="card">One card a page, CMYK PDF/X-1a (print shop)</option>
 </select>
 <label><input type="checkbox" id="refetch"> start again from scratch</label>
 <label><input type="checkbox" id="showskipped" onchange="loadArtworkSafely()">
@@ -688,7 +691,8 @@ async function makeSheets() {
   const body = await r.json();
   if (!r.ok) { document.getElementById('artmsg').textContent = body.error; return; }
   const msg = document.getElementById('artmsg');
-  const paper = (body.paper || 'a4').toUpperCase();
+  const paper = body.paper === 'card' ? 'card-sized'
+              : (body.paper || 'a4').toUpperCase();
   msg.replaceChildren(
     document.createTextNode(`${body.cards} card(s) on ${body.pages} ${paper} page(s). `));
   const link = el('a', 'Download the PDF');

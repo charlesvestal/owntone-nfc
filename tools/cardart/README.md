@@ -105,6 +105,24 @@ cut marks continue each cut line through those gaps.
   nothing is upscaled. A short last page is left blank in the empty cells, so
   220 cards come out as 28 full pages.
 
+`--paper card` is one card to a page, for a print shop that cuts each card
+from its own page:
+
+- 101 × 101mm pages: MediaBox = BleedBox, TrimBox the centred 95mm square.
+  The cover fills the trim; the 3mm of bleed all round is the cover
+  mirrored outward, so nothing of it is lost.
+- **CMYK, PDF/X-1a:2001**, converted to and tagged with **PSO Coated v3
+  (FOGRA51)**, relative colorimetric with black point compensation. No crop
+  or registration marks, no fonts, no transparency.
+- The profile is ECI's: free to use and embed, not to redistribute, so it is
+  not in this repository. The first build downloads it into the artwork
+  directory. Converted covers are cached in `.cmyk/` there.
+- Covers are brought down to 1500px (400dpi at 95mm) while they are being
+  converted, and never scaled up. Anything under 1122px (300dpi) is listed.
+
+Nothing here has been through a real PDF/X preflight; the printer's upload
+check is the one that counts.
+
 JPEGs are embedded as-is rather than re-encoded, so nothing is resampled on
 the way through. Artwork that isn't square is centre-cropped with a clipping
 path: the picture is scaled to cover the square and the square is painted.
