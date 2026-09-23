@@ -120,6 +120,11 @@ MARK_CLEAR_MM = 0.5
 MARGIN_MARK_OFFSET_MM = 5.0
 MARGIN_MARK_LEN_MM = 5.0
 
+# A spare card is a plain field for a handwritten label, for albums that arrive
+# after the print run. Light neutral grey, black ink only: pure white reads as
+# a misprint, and a tint of one ink cannot drift towards a colour on press.
+SPARE_CMYK = (0.0, 0.0, 0.0, 0.15)
+
 _SOF = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
         0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
 
@@ -338,7 +343,7 @@ def _paint(name: str, img_w: int, img_h: int, x: float, y: float,
 
 
 def _render(directory: str, chosen: list, out_path: str,
-            layout: Layout) -> int:
+            layout: Layout, spares: int = 0) -> int:
     pdf = Pdf()
     converter = None
     if layout.pdfx:
@@ -384,6 +389,19 @@ def _render(directory: str, chosen: list, out_path: str,
         resources = " ".join(f"/{name} {image_id} 0 R"
                              for image_id, (name, _, _) in batch)
         resource_ids.append(pdf.add(f"<< /XObject << {resources} >> >>".encode()))
+
+    # Spares go last, so the album cards keep their page numbers. The field
+    # fills the whole page, bleed included, straight in CMYK: there is nothing
+    # to convert.
+    if spares:
+        c, m, y, k = SPARE_CMYK
+        stream = (f"{c:g} {m:g} {y:g} {k:g} k 0 0 {layout.page_w * MM:.4f} "
+                  f"{layout.page_h * MM:.4f} re f").encode()
+        spare_content = pdf.add(
+            f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream")
+        spare_resources = pdf.add(b"<< >>")
+        content_ids += [spare_content] * spares
+        resource_ids += [spare_resources] * spares
 
     media = f"[0 0 {layout.page_w * MM:.4f} {layout.page_h * MM:.4f}]"
     boxes = ""
@@ -452,7 +470,8 @@ def _adobe_inverted(data: bytes) -> bool:
 
 def build_sheets(directory: str, out_path: str, min_px: int = 0,
                  include_suspect: bool = False,
-                 only: set[str] | None = None, paper: str = "a4") -> dict:
+                 only: set[str] | None = None, paper: str = "a4",
+                 pad_to: int = 0) -> dict:
     """Write the print PDF. Returns what went on it and what did not.
 
     `only` restricts the sheet to a set of album paths, so what prints matches
@@ -461,8 +480,15 @@ def build_sheets(directory: str, out_path: str, min_px: int = 0,
 
     `paper` picks the layout from LAYOUTS. Art below that layout's resolution
     floor still prints, and is listed under "low_res" for someone to look at.
+
+    `pad_to` tops a one-card-a-page file up to that many pages with blank
+    spare cards at the end. More cards than that are all printed; nothing is
+    dropped to make the count.
     """
     layout = LAYOUTS[paper]
+    if pad_to and layout.per_page != 1:
+        raise ValueError("Spares are whole pages; only a one-card-a-page "
+                         "file can have them.")
     with open(os.path.join(directory, "manifest.json")) as handle:
         manifest = json.load(handle)
 
@@ -481,12 +507,14 @@ def build_sheets(directory: str, out_path: str, min_px: int = 0,
 
     if not chosen:
         return {"cards": 0, "pages": 0, "skipped": skipped, "low_res": [],
-                "paper": paper}
+                "paper": paper, "spares": 0}
 
     low_res = [{"album": a, "px": min(e["width"], e.get("height", e["width"]))}
                for a, e in chosen
                if min(e["width"], e.get("height", e["width"])) < layout.min_px]
-    pages = _render(directory, chosen, out_path, layout)
+    spares = max(0, pad_to - len(chosen))
+    pages = _render(directory, chosen, out_path, layout, spares)
     return {"cards": len(chosen), "pages": pages, "paper": paper,
+            "spares": spares,
             "skipped": [{"album": a, "why": w} for a, w in skipped],
             "low_res": low_res}

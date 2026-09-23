@@ -594,6 +594,12 @@ def create_app(config, controller, store, owntone=None, power=None,
         paper = payload.get("paper") or "a4"
         if paper not in LAYOUTS:
             return jsonify(error=f"Unknown paper {paper!r}."), 400
+        try:
+            pad_to = max(0, int(payload.get("pad_to") or 0))
+        except (TypeError, ValueError):
+            return jsonify(error="Pad to needs a number of pages."), 400
+        if pad_to and LAYOUTS[paper].per_page != 1:
+            return jsonify(error="Only the one-card-a-page file has spares."), 400
         out_dir = _artwork_dir()
         target = os.path.join(out_dir, "cards-to-print.pdf")
         # Print exactly what the grid is showing. Left to itself build_sheets
@@ -607,7 +613,8 @@ def create_app(config, controller, store, owntone=None, power=None,
             result = build_sheets(out_dir, target,
                                   int(payload.get("min_px") or 0),
                                   bool(payload.get("include_suspect")),
-                                  only=only, paper=paper)
+                                  only=only, paper=paper,
+                                  pad_to=pad_to)
         except FileNotFoundError:
             return jsonify(error="No artwork collected yet."), 409
         except Exception as exc:                        # noqa: BLE001

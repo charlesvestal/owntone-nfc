@@ -506,3 +506,48 @@ def test_cmyk_brings_huge_covers_down_and_never_scales_up(tmp_path, pso_profile)
     assert jpeg_info(converter.jpeg(str(tmp_path / "3000.jpg")))[:3] == (
         cmyk.MAX_PX, cmyk.MAX_PX, 4)
     assert jpeg_info(converter.jpeg(str(tmp_path / "800.jpg")))[:2] == (800, 800)
+
+
+def test_spares_pad_the_card_file_at_the_end(tmp_path, pso_profile):
+    import pathlib
+    import re
+    globals()["pathlib"] = pathlib
+    from nfc_jukebox.cardart import build_sheets, sheets
+    _one_card_pdf(tmp_path, paper="card")          # sets up the artwork
+    out = tmp_path / "padded.pdf"
+    result = build_sheets(str(tmp_path / "art"), str(out), 0, True,
+                          paper="card", pad_to=5)
+    assert (result["cards"], result["spares"], result["pages"]) == (1, 4, 5)
+    pdf = out.read_bytes()
+    assert b"/Count 5" in pdf
+    # The album is page 1, the spares after it: the first page's content is
+    # the cover, and the spare field is drawn in CMYK, never white.
+    kids = re.search(rb"/Kids \[([^\]]*)\]", pdf).group(1).split(b" 0 R")
+    first = int(kids[0])
+    page = re.search(rb"\n%d 0 obj\n(.*?)endobj" % first, pdf, re.S).group(1)
+    content = int(re.search(rb"/Contents (\d+) 0 R", page).group(1))
+    body = re.search(rb"\n%d 0 obj\n(.*?)endobj" % content, pdf, re.S).group(1)
+    assert b" Do" in body
+    c, m, y, k = sheets.SPARE_CMYK
+    assert f"{c:g} {m:g} {y:g} {k:g} k".encode() in pdf
+    assert sum(sheets.SPARE_CMYK) >= 0.1, "a spare must not read as white"
+
+
+def test_more_cards_than_the_pad_are_all_printed(tmp_path, pso_profile):
+    import pathlib
+    globals()["pathlib"] = pathlib
+    from nfc_jukebox.cardart import build_sheets
+    _one_card_pdf(tmp_path, paper="card")
+    result = build_sheets(str(tmp_path / "art"), str(tmp_path / "p.pdf"), 0,
+                          True, paper="card", pad_to=0)
+    assert (result["cards"], result["spares"], result["pages"]) == (1, 0, 1)
+
+
+def test_spares_are_refused_on_a_sheet_of_several_cards(tmp_path):
+    import pathlib
+    globals()["pathlib"] = pathlib
+    from nfc_jukebox.cardart import build_sheets
+    _one_card_pdf(tmp_path)
+    with pytest.raises(ValueError):
+        build_sheets(str(tmp_path / "art"), str(tmp_path / "p.pdf"), 0, True,
+                     paper="a3", pad_to=8)

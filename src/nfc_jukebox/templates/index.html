@@ -133,6 +133,9 @@
   <option value="a3">A3, 8 a page (print shop)</option>
   <option value="card">One card a page, CMYK PDF/X-1a (print shop)</option>
 </select>
+<label id="padlabel" hidden>pad with spares to
+  <input id="padto" type="number" min="0" step="1" value="220"
+         style="width:5em"> pages</label>
 <label><input type="checkbox" id="refetch"> start again from scratch</label>
 <label><input type="checkbox" id="showskipped" onchange="loadArtworkSafely()">
   show skipped</label>
@@ -682,19 +685,31 @@ async function fixArtwork(a) {
   loadArtworkSafely();
 }
 
+// Spares are whole pages, so they only exist for the one-card-a-page file.
+function padTo() {
+  if (document.getElementById('paper').value !== 'card') return 0;
+  return parseInt(document.getElementById('padto').value, 10) || 0;
+}
+document.getElementById('paper').addEventListener('change', e => {
+  document.getElementById('padlabel').hidden = e.target.value !== 'card';
+});
+
 async function makeSheets() {
   document.getElementById('artmsg').textContent = 'Building\u2026';
   const r = await fetch('/api/artwork/sheets',
     {method: 'POST', headers: {'Content-Type': 'application/json'},
      body: JSON.stringify({all: includeAssigned(),
-                           paper: document.getElementById('paper').value})});
+                           paper: document.getElementById('paper').value,
+                           pad_to: padTo()})});
   const body = await r.json();
   if (!r.ok) { document.getElementById('artmsg').textContent = body.error; return; }
   const msg = document.getElementById('artmsg');
   const paper = body.paper === 'card' ? 'card-sized'
               : (body.paper || 'a4').toUpperCase();
   msg.replaceChildren(
-    document.createTextNode(`${body.cards} card(s) on ${body.pages} ${paper} page(s). `));
+    document.createTextNode(`${body.cards} card(s)` +
+      (body.spares ? ` and ${body.spares} spare(s)` : '') +
+      ` on ${body.pages} ${paper} page(s). `));
   const link = el('a', 'Download the PDF');
   // Every build writes the same file name, so switching paper would otherwise
   // hand back the browser's cached copy of the last one.

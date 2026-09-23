@@ -119,6 +119,10 @@ from its own page:
   directory. Converted covers are cached in `.cmyk/` there.
 - Covers are brought down to 1500px (400dpi at 95mm) while they are being
   converted, and never scaled up. Anything under 1122px (300dpi) is listed.
+- `--pad-to 220` adds **spare cards** after the albums until there are 220
+  pages: a light neutral grey field (K 15%, no other ink) over the full
+  101mm, for a handwritten label. Not white, which would read as a
+  misprint. More albums than that are all printed; none are dropped.
 
 Nothing here has been through a real PDF/X preflight; the printer's upload
 check is the one that counts.

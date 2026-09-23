@@ -1234,7 +1234,7 @@ def test_sheets_only_print_the_albums_on_screen(tmp_path):
     calls = {}
 
     def fake_sheets(directory, out_path, min_px, include_suspect, only=None,
-                    paper="a4"):
+                    paper="a4", pad_to=0):
         calls["only"] = only
         return {"cards": 1, "pages": 1, "skipped": []}
 
@@ -1259,8 +1259,9 @@ def test_sheets_take_the_paper_and_refuse_one_they_do_not_know(tmp_path):
     calls = {}
 
     def fake_sheets(directory, out_path, min_px, include_suspect, only=None,
-                    paper="a4"):
+                    paper="a4", pad_to=0):
         calls["paper"] = paper
+        calls["pad_to"] = pad_to
         return {"cards": 1, "pages": 1, "skipped": [], "low_res": [],
                 "paper": paper}
 
@@ -1271,6 +1272,12 @@ def test_sheets_take_the_paper_and_refuse_one_they_do_not_know(tmp_path):
         assert calls["paper"] == "a3"
         assert client.post("/api/artwork/sheets",
                            json={"paper": "letter"}).status_code == 400
+        client.post("/api/artwork/sheets", json={"paper": "card", "pad_to": 220})
+        assert calls["pad_to"] == 220
+        assert client.post("/api/artwork/sheets",
+                           json={"paper": "a4", "pad_to": 220}).status_code == 400
+        assert client.post("/api/artwork/sheets",
+                           json={"paper": "card", "pad_to": "lots"}).status_code == 400
     finally:
         cardart.build_sheets = original
 

@@ -30,11 +30,14 @@ def main() -> int:
                         help="a4: 6 a page with gaps, for home; "
                              "a3: 8 touching with bleed, for a print shop; "
                              "card: one a page, CMYK PDF/X-1a, for a print shop")
+    parser.add_argument("--pad-to", type=int, default=0, metavar="PAGES",
+                        help="with --paper card: add blank spare cards at the "
+                             "end to make this many pages")
     args = parser.parse_args()
 
     out = args.out or os.path.join(args.dir, "covers-to-print.pdf")
     result = build_sheets(args.dir, out, args.min_px, args.include_suspect,
-                          paper=args.paper)
+                          paper=args.paper, pad_to=args.pad_to)
     layout = LAYOUTS[args.paper]
     if not result["cards"]:
         print("nothing to print")
@@ -43,6 +46,8 @@ def main() -> int:
     print(f"{result['cards']} card(s) on {result['pages']} "
           f"{args.paper.upper()} page(s), {CARD_MM:g}mm square, "
           f"{layout.cols}x{layout.rows} per page")
+    if result["spares"]:
+        print(f"{result['spares']} spare(s) at the end")
     if result["low_res"]:
         print(f"\n{len(result['low_res'])} below {layout.min_px}px "
               f"(printed anyway, not upscaled):")
