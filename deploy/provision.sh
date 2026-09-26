@@ -142,9 +142,14 @@ say "Music mount"
 # This lives here rather than only in the runbook because a rebuild onto a
 # fresh SD card would otherwise come back with the 4MB default, and the symptom
 # is audible rather than obvious.
+#
+# No x-systemd.idle-timeout. Unmounting drops OwnTone's inotify watches, its
+# re-watch touches the share and remounts it, and the ~6 min re-walk stalls
+# the player long enough that a card tap times out. With 600s that looped
+# every ~17 minutes, all day.
 MOUNT_OPTS="credentials=${NAS_CREDS},uid=${USER_NAME},gid=${USER_NAME}"
 MOUNT_OPTS="${MOUNT_OPTS},file_mode=0444,dir_mode=0555,iocharset=utf8,ro"
-MOUNT_OPTS="${MOUNT_OPTS},nofail,_netdev,x-systemd.automount,x-systemd.idle-timeout=600"
+MOUNT_OPTS="${MOUNT_OPTS},nofail,_netdev,x-systemd.automount"
 MOUNT_OPTS="${MOUNT_OPTS},rsize=131072,wsize=131072"
 
 if [ -n "$NAS_SHARE" ]; then

@@ -232,9 +232,15 @@ The library is an SMB mount from the UGREEN NAS, mounted read-only at
 ```
 //192.168.2.46/Media/music/library /srv/music cifs \
   credentials=/etc/samba/creds/nas,uid=pi,gid=pi,file_mode=0444,dir_mode=0555,\
-  iocharset=utf8,ro,nofail,_netdev,x-systemd.automount,x-systemd.idle-timeout=600,\
+  iocharset=utf8,ro,nofail,_netdev,x-systemd.automount,\
   rsize=131072,wsize=131072 0 0
 ```
+
+Do not add `x-systemd.idle-timeout`. Each idle unmount drops OwnTone's inotify
+watches; re-adding them remounts the share and re-walks every album folder for
+~6 minutes, and a card tapped during that walk fails with "OwnTone error while
+starting <album>: timed out". The automount still mounts on first access after
+boot, and the SMB client reconnects on its own if the NAS goes away.
 
 `provision.sh` writes this line for you if you pass the share, and re-running
 it **updates** an existing entry rather than duplicating it - which is how the
