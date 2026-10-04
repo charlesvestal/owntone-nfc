@@ -147,10 +147,20 @@ say "Music mount"
 # re-watch touches the share and remounts it, and the ~6 min re-walk stalls
 # the player long enough that a card tap times out. With 600s that looped
 # every ~17 minutes, all day.
+#
+# echo_interval=5 is for Wi-Fi reconnects. This router hands the box a new
+# address on most re-associations, and the share's TCP connection is still
+# bound to the old one: packets from it are never sent, so nothing errors and
+# CIFS only gives up after three missed echoes. At the default 60s that is
+# 180 seconds in which every card tap times out -- it happened about a dozen
+# times in two days. At 5s it reconnects (from the new address) in ~15s.
+# Killing the stale socket from a NetworkManager hook was tried and does not
+# work: this kernel has no socket-destroy support, and the dead socket's
+# packets never reach netfilter for a reset rule to catch.
 MOUNT_OPTS="credentials=${NAS_CREDS},uid=${USER_NAME},gid=${USER_NAME}"
 MOUNT_OPTS="${MOUNT_OPTS},file_mode=0444,dir_mode=0555,iocharset=utf8,ro"
 MOUNT_OPTS="${MOUNT_OPTS},nofail,_netdev,x-systemd.automount"
-MOUNT_OPTS="${MOUNT_OPTS},rsize=131072,wsize=131072"
+MOUNT_OPTS="${MOUNT_OPTS},rsize=131072,wsize=131072,echo_interval=5"
 
 if [ -n "$NAS_SHARE" ]; then
   cp -n /etc/fstab /etc/fstab.orig 2>/dev/null || true
