@@ -131,7 +131,16 @@ sudo bash /home/pi/owntone-nfc/deploy/provision.sh
 ```
 
 Copy albums to `/srv/music/<Artist>/<Album>/` (Samba share at
-`smb://jukebox.local`), then open **http://jukebox.local:8080**, tap a card,
+`smb://jukebox.local`). If the library lives on a NAS instead, pass the share
+and then store its login:
+
+```bash
+sudo NAS_SHARE=//<nas-ip>/<share>/<path> bash /home/pi/owntone-nfc/deploy/provision.sh
+sudo nas-creds <nas-username>
+```
+
+Give the Pi a DHCP reservation on your router either way; see
+[`docs/runbook.md`](docs/runbook.md) for why. Then open **http://jukebox.local:8080**, tap a card,
 pick an album, save.
 
 The same page collects cover art for albums that have no card yet, so you can

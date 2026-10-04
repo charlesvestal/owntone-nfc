@@ -42,7 +42,7 @@ and not missed.
 
 **This is the single most expensive thing to rediscover.**
 
-With `802-11-wireless.powersave` on (the default), this Pi associates normally,
+With `802-11-wireless.powersave` on (the default), a Pi 4 associates normally,
 completes the handshake, transmits at 260 Mbit/s — and receives at **6 Mbit/s**,
 the floor. DHCP times out, nothing routes, and the box vanishes from the
 network while believing it is connected. It looks exactly like a dead router, a
@@ -59,9 +59,24 @@ netplan generating the NetworkManager config. The setting lives only in
 NetworkManager on the SD card, so a rebuild without provision.sh will hit this
 again.
 
-Diagnosing this took hours, mostly because the fix was applied early and then
-buried under two other changes (a BSSID pin and a static IP) whose failure
-masked it. **Change one thing at a time.**
+When debugging Wi-Fi, **change one thing at a time.** A fix applied early and
+then buried under other changes (a BSSID pin, a static IP) whose own failure
+masks it is how this one stayed hidden for hours.
+
+## Wi-Fi: keep the Pi's address stable
+
+Give the Pi a **DHCP reservation** on your router. Some routers hand out a new
+address when the Pi re-associates, even though its MAC never changes. The NAS
+connection is still bound to the old address, so it hangs silently until CIFS
+declares the server dead, and every card tapped in that window fails with
+"OwnTone error while starting <album>: timed out".
+
+`provision.sh` mounts the share with `echo_interval=5`, which cuts that window
+from 180 seconds (the default, three missed 60s echoes) to about 15. The
+reservation removes it. The tell in the logs is a new DHCP lease followed a
+few minutes later by:
+
+    CIFS: VFS: \\<nas-ip> has not responded in 180 seconds. Reconnecting...
 
 ## AirPlay
 
@@ -75,165 +90,125 @@ authentication. Without it, every Apple device stops working as it updates to
 Network".** Apple's default cannot be satisfied by a Linux sender; the symptom
 is a speaker that deselects itself the moment playback starts.
 
-**What works:** both HomePods selected as two separate outputs. That is real
-stereo — verified with the hard-panned test file at `ZZ Test/Stereo Test/` in
-the library. Keep that file; impressions about stereo were wrong twice.
+**What works:** a HomePod stereo pair, with both HomePods selected as two
+separate outputs. That is real stereo — verify it with a hard-panned test file
+rather than by ear; impressions about stereo were wrong twice.
 
-**What does not work:** targeting the Apple TV ("Living Room"). It pairs,
-accepts the session, shows the track and honours seeks, but never advances its
-playhead or produces audio. Best explanation is that as AirPlay group leader it
-expects group semantics OwnTone does not implement. Do not re-attempt without
-new information.
+**What does not work:** targeting an Apple TV. It pairs, accepts the session,
+shows the track and honours seeks, but never advances its playhead or produces
+audio. Best explanation is that as AirPlay group leader it expects group
+semantics OwnTone does not implement. Do not re-attempt without new
+information.
 
 **macOS is not usable as a test receiver** — macOS 27 returns 403 to an
 unauthenticated `/info` probe even over loopback.
 
-## Wi-Fi: use the 2.4 GHz SSID, not 5 GHz
+## Wi-Fi: prefer 2.4 GHz unless the router is close
 
-**This board's 5 GHz path fails in the jukebox's normal position, and 2.4 GHz
-works. Configure `<2.4GHz-SSID>`.** Everything below is the evidence, because
-two earlier outages were blamed on the wrong thing.
+**A Pi 4's onboard 5 GHz receive path can fail outright at a range where
+2.4 GHz is fine.** If your router broadcasts the bands as separate SSIDs,
+configure the 2.4 GHz one.
 
-Measured 2026-09-19, same board, same spot, minutes apart:
+Measured on the reference build, same board, same spot, minutes apart:
 
-| Band | SSID | Channel | Signal | DHCP | Rate |
-|---|---|---|---|---|---|
-| 5 GHz | `<5GHz-SSID>` | 36 (non-DFS) | -69 dBm | **never completes** | - |
-| 2.4 GHz | `<2.4GHz-SSID>` | 11 | **-58 dBm** | instant | 130 Mbit/s |
-
-Eleven dB, and the difference between working and not. 2.4 GHz penetrates; the
-box sits where it sits.
+| Band | Channel | Signal | DHCP | Rate |
+|---|---|---|---|---|
+| 5 GHz | 36 (non-DFS) | -69 dBm | **never completes** | - |
+| 2.4 GHz | 11 | **-58 dBm** | instant | 130 Mbit/s |
 
 The 5 GHz failure is always the same and is thoroughly misleading: it
 associates, completes the 4-way handshake, logs *"Connected to wireless
 network"* - and then DHCP opens a transaction and gets nothing. The box is
-alive and believes it is fine, while being completely unreachable.
-
-### What this is NOT - four theories that were wrong
-
-Each cost real time. Do not re-run them.
-
-**Not DFS.** The earlier outage was blamed on the router defaulting 5 GHz to
-channels 100/104/108/112, which are radar-protected, where a client may not
-probe actively. Plausible, and wrong: on 2026-09-19 the identical failure
-reproduced on **channel 36, a non-DFS channel**, with the router's 5 GHz band
-correctly pinned. DFS is not necessary to produce this.
-
-The signal-level explanation that replaced it is also wrong - see *Not the
-signal level* below. The earlier "changing to channel 36 fixed it" result was
-almost certainly neither the channel nor the margin; whatever it was, it did
-not hold.
-
-**Not a 2.4 GHz radio fault.** This runbook previously stated the board sees
-zero 2.4 GHz networks, ever, and fails even a directed probe. That is no longer
-true - after the 2026-09-15 rebuild onto Trixie (kernel 6.18.50) a scan shows
-five 2.4 GHz networks, `<2.4GHz-SSID>` among them at the strongest signal of
-any AP the board can see. If the fault was ever real, the newer firmware fixed
-it. Note also that the two bands are *separate SSIDs* here, so the old
-"forcing the 2.4 GHz band didn't work" test proved nothing: it was forcing a
-profile for `<5GHz-SSID>`, which does not exist on 2.4.
-
-**Not the signal level.** This runbook previously identified a cliff around
--67 dBm - -66 dBm worked, -69 dBm failed, twice. That is wrong. On 2026-09-20
-the board associated with `<5GHz-SSID>` on channel 36 at **-63 to -65 dBm**,
-*better* than the -66 dBm that reportedly worked, held the association for two
-unbroken minutes, and passed **zero bytes**. A static address was configured so
-DHCP was bypassed entirely, and it still could not reach the gateway.
-
-So the failure is neither about margin nor about DHCP. `iw` during the attempt:
+alive and believes it is fine, while being completely unreachable. `iw` during
+the attempt:
 
     rate=6.0/390.0    d_rx=0
 
-Transmit negotiated 390 Mbit/s. Receive was pinned at 6.0 Mbit/s - the floor -
-and not one byte arrived. **The 5 GHz receive path is dead on this board**, and
-DHCP timing out is just the first thing you notice. For scale, a Mac in the same
-room uses that same channel 36 AP at -73 dBm, ten dB weaker, with 0% loss.
+Transmit negotiated 390 Mbit/s; receive was pinned at the 6.0 Mbit/s floor and
+not one byte arrived. DHCP timing out is just the first thing you notice.
 
-**Not the enclosure.** The box ran for months in that same enclosure in that
-same spot, and 2.4 GHz works fine inside it today. The enclosure does not
-change, so it cannot explain a box that stops working.
+### What this is NOT
 
-### A USB Wi-Fi adapter is not currently needed
+Each of these was a plausible theory and each was wrong. Do not re-run them.
 
-Earlier advice here was to buy one. With 2.4 GHz working at -58 dBm that is
-unnecessary - and note that the jitter which once looked like a reason to buy
-one turned out to be the 4 MB SMB read size, fixed in software (see *Read size*
-above). Measure `rsize` before spending money on a radio.
+- **Not DFS.** The identical failure reproduces on channel 36, which is not
+  radar-protected.
+- **Not the signal level.** The board also failed at -63 to -65 dBm, holding
+  the association for minutes with a static address (so DHCP was bypassed) and
+  passing zero bytes, while a Mac in the same room used the same AP at -73 dBm
+  with 0% loss.
+- **Not the enclosure.** 2.4 GHz works fine from inside it.
+- **Not a 2.4 GHz radio fault.** Older firmware was once seen listing no 2.4 GHz
+  networks at all; a current kernel (6.18, Trixie) scans them normally. If you
+  see that, update before buying hardware.
 
-A dongle remains the **only** route to 5 GHz on this box, since the onboard
-5 GHz receive path is dead rather than marginal. That is a want, not a need,
-while 2.4 GHz carries a FLAC in and two AirPlay streams out with a median
-latency of 5 ms. If the box is ever moved somewhere 2.4 also fails, pick one whose
-driver is in the mainline kernel so nothing has to be rebuilt when the kernel
-updates: the **Alfa AWUS036ACM** (MediaTek MT7612U, `mt76x2u`, dual-band,
-detachable antenna) or the cheaper **Panda PAU0B** (RT5572, `rt2800usb`).
-Avoid RTL8811AU/8821AU/8812AU sticks (TP-Link Archer T2U/T3U and most cheap AC
-dongles) - out-of-tree DKMS drivers are exactly the wrong property for an
-appliance that must come back silently after a reboot.
+### A USB Wi-Fi adapter is usually not needed
 
-## Wi-Fi: the current configuration
+2.4 GHz carries a FLAC in and two AirPlay streams out with a median latency of
+5 ms. Jitter that looks like a reason to buy an adapter is usually the 4 MB SMB
+read size, fixed in software (see *Read size* below). Measure `rsize` before
+spending money on a radio.
 
-As left on 2026-09-19:
+If you do need 5 GHz, or 2.4 also fails where the box sits, pick an adapter
+whose driver is in the mainline kernel so nothing has to be rebuilt when the
+kernel updates: the **Alfa AWUS036ACM** (MediaTek MT7612U, `mt76x2u`,
+dual-band, detachable antenna) or the cheaper **Panda PAU0B** (RT5572,
+`rt2800usb`). Avoid RTL8811AU/8821AU/8812AU sticks (TP-Link Archer T2U/T3U and
+most cheap AC dongles) - out-of-tree DKMS drivers are exactly the wrong
+property for an appliance that must come back silently after a reboot.
+
+### Recommended profiles
 
 | Profile | Band | Autoconnect | Priority | Powersave |
 |---|---|---|---|---|
 | `<2.4GHz-SSID>` | 2.4 GHz | yes | 10 | off |
-| `<5GHz-SSID>` | 5 GHz | **no** | 0 | off |
+| `<5GHz-SSID>` (optional) | 5 GHz | **no** | 0 | off |
 
-The 5 GHz profile is deliberately `autoconnect no`. Left enabled it grabs
-`wlan0` at boot, spends 45 seconds failing DHCP, and can wedge the box off the
-network entirely. It is kept only so it is there if the box is ever moved
-somewhere 5 GHz is strong.
+If you keep a 5 GHz profile, set it `autoconnect no`. Left enabled it can grab
+`wlan0` at boot, spend 45 seconds failing DHCP, and wedge the box off the
+network entirely.
 
-Verified by reboot: `wlan0` came back unattended in about 30 seconds on
-`192.168.2.188`, -59 dBm, 130 Mbit/s, with `nfc-jukebox`, `owntone` and
-`avahi-daemon` all active.
+## When the box vanishes from the network
 
-## The outage of 2026-09-19
+**First suspect: no Wi-Fi profile at all.** Raspberry Pi Imager's Wi-Fi setup
+can silently fail to take. `nmcli con show` listing only the wired connection,
+and an empty `/etc/NetworkManager/system-connections/`, is the whole answer.
+`provision.sh` refuses to run in that state rather than reporting success on a
+box that cannot reach the network.
 
-**Cause: the box had no Wi-Fi configuration at all.** `nmcli con show` listed
-only the wired connection, and `/etc/NetworkManager/system-connections/` was
-empty. The card was rebuilt on 2026-09-15 and re-provisioned on 2026-09-18;
-Raspberry Pi Imager's Wi-Fi setup did not take, and nothing noticed.
+`jukebox.local` not resolving looks like an mDNS problem, and usually is not.
+To tell in one step, ping-sweep the subnet and grep the ARP table for the Pi's
+MAC prefix (`e4:5f:01`, `dc:a6:32`, `d8:3a:dd` or `2c:cf:67` for Pi 4/5 boards,
+`b8:27:eb` for older ones). Absent means it never got a DHCP lease, so the
+problem is the radio, not the name.
 
-`provision.sh` made it silent. Its power-save loop only *modifies* Wi-Fi
-connections that already exist, so with no profile it matched nothing, `|| true`
-swallowed it, and provisioning reported success on a box that could not reach
-the network. It now fails loudly in that case instead.
-
-Worth knowing for next time: the symptom was `jukebox.local` not resolving,
-which looks like mDNS. It was not. The way to tell in one step is to ping-sweep
-the subnet and grep the ARP table for this Pi 4's OUI, `e4:5f:01` - absent
-means it never got a DHCP lease, so the problem is the radio, not the name.
-
-The router lists several stale `jukebox*` entries, all offline: `.188`
-(`<pi-wlan0-mac>`, wlan0) and `.189` (`<pi-eth0-mac>`, eth0) are this Pi
-4; `.224` and `.225` are `B8:27:EB:...`, earlier boards. The `-1/-2/-3` suffixes
-are the Speedport disambiguating different MACs that all announced the hostname
-`jukebox`. Not a name conflict on the Pi, and not a fault.
+A router may list several stale `jukebox`, `jukebox-1`, `jukebox-2` entries:
+that is the router disambiguating different MACs (wlan0 and eth0, or earlier
+boards) that all announced the same hostname. Not a fault.
 
 ## Common failures
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Box invisible on the network after a reboot | Wi-Fi power save | See above. Check `iw wlan0 link` — rx bitrate at 6 Mbit/s is the tell. |
-| Box invisible and `jukebox.local` does not resolve | Usually no Wi-Fi profile, or `wlan0` on 5 GHz | First: `nmcli con show` — if there is no Wi-Fi connection, that is the whole answer. Confirm the box is absent rather than merely unnamed by ping-sweeping the subnet and grepping the ARP table for `e4:5f:01`; no entry means it never got a DHCP lease, so it is not mDNS. Then check it is on `<2.4GHz-SSID>`, not `<5GHz-SSID>`. |
+| Box invisible and `jukebox.local` does not resolve | Usually no Wi-Fi profile, or `wlan0` on 5 GHz | First: `nmcli con show` — if there is no Wi-Fi connection, that is the whole answer. Confirm the box is absent rather than merely unnamed by ping-sweeping the subnet and grepping the ARP table for the Pi's MAC prefix; no entry means it never got a DHCP lease, so it is not mDNS. Then check it is on the 2.4 GHz SSID. |
+| A card times out now and then, then works on a second tap | The Pi's address changed and the NAS connection is hanging | See *keep the Pi's address stable*. `journalctl \| grep -E "new lease\|not responded"` shows the pairing. |
 | Reader stops responding; log shows `ETIMEDOUT` repeatedly | PN532 wedged out of frame sync, usually by a service restart killing it mid-transaction | Automatic: the reader pulses RSTPDN on GPIO20 after 2 failures and recovers in ~4s. If it does not, check the RSTPDN↔D20 jumper. Manual: `pinctrl set 20 op dl; sleep 1; pinctrl set 20 op dh` |
 | A card plays nothing; status flaps play/pause | Card technology with unstable presence — 4-byte Mifare-style cards report present for ~8ms at a time | Already handled by `presence_debounce_s` (0.5s). If a new card still flaps, raise it. |
 | An album plays shuffled or not from track 1 | Shuffle enabled in OwnTone's UI | The controller forces shuffle/repeat off per card. If it persists, check the log for an error on that call. |
 | Speaker drops mid-album, status shows an error | AirPlay receiver refused pairing; OwnTone fell back to local | Check Apple Home access setting. The error names which output was lost. |
 | Admin page shows no cards | Page-level failure, not data loss | Check `curl localhost:8080/api/cards` first — the registry is almost certainly intact. |
 
-## Music on the NAS
+## Music on a NAS
 
-The library is an SMB mount from the UGREEN NAS, mounted read-only at
-`/srv/music` so the jukebox can never damage it.
+The library can live on the SD card, or on a NAS mounted read-only at
+`/srv/music` so the jukebox can never damage it:
 
 ```
-//192.168.2.46/Media/music/library /srv/music cifs \
+//<nas-ip>/<share>/<path> /srv/music cifs \
   credentials=/etc/samba/creds/nas,uid=pi,gid=pi,file_mode=0444,dir_mode=0555,\
   iocharset=utf8,ro,nofail,_netdev,x-systemd.automount,\
-  rsize=131072,wsize=131072 0 0
+  rsize=131072,wsize=131072,echo_interval=5 0 0
 ```
 
 Do not add `x-systemd.idle-timeout`. Each idle unmount drops OwnTone's inotify
@@ -243,47 +218,46 @@ starting <album>: timed out". The automount still mounts on first access after
 boot, and the SMB client reconnects on its own if the NAS goes away.
 
 `provision.sh` writes this line for you if you pass the share, and re-running
-it **updates** an existing entry rather than duplicating it - which is how the
-read-size fix reaches a box built before it existed:
+it **updates** an existing entry rather than duplicating it - which is how
+mount-option fixes reach a box built before they existed:
 
 ```
-sudo NAS_SHARE=//192.168.2.46/Media/music/library bash deploy/provision.sh
+sudo NAS_SHARE=//<nas-ip>/<share>/<path> bash deploy/provision.sh
 ```
 
 Leave `NAS_SHARE` unset and `/etc/fstab` is left entirely alone. The address is
-never committed: it is passed in, because this repo does not carry the home
+passed in rather than committed: this repo does not carry anyone's home
 network. Credentials are separate and are not written by provisioning.
 
-**By IP, deliberately, not `//vestnas.local/`.** The hostname version worked
-for weeks and then stopped: the NAS began advertising only an IPv6 address
-over mDNS, and the Pi resolves with `mdns4_minimal`, which is IPv4-only. The
-mount failed at boot with `could not resolve address for vestnas.local`, and
-because both services required the mount, the box went completely silent -
-no music and no admin page to say why.
+**Mount by IP, not `//<nas>.local/`.** The hostname form can work for weeks and
+then stop: a NAS may begin advertising only an IPv6 address over mDNS, and the
+Pi resolves with `mdns4_minimal`, which is IPv4-only. The mount fails at boot
+with `could not resolve address for <nas>.local`, and because OwnTone requires
+the mount, the box plays nothing.
 
-Pinning the name in `/etc/hosts` is **not** a fix. `/etc/hosts` here is
-managed by cloud-init and rewritten on every boot, so that repair survives
-until the next restart and then fails exactly as before.
+Pinning the name in `/etc/hosts` is **not** a fix. `/etc/hosts` on Raspberry Pi
+OS is managed by cloud-init and rewritten on every boot, so that repair
+survives until the next restart and then fails exactly as before.
 
 The cost of an IP is that it must not move: give the NAS a static address, or
 a DHCP reservation on the router.
 
-Credentials live in `/etc/samba/creds/nas` (`0600`, root). Recreate with
-`sudo /usr/local/sbin/nas-creds charlesvestal`, which prompts rather than
-taking the password as an argument.
+Credentials live in `/etc/samba/creds/nas` (`0600`, root). Create or replace
+them with `sudo nas-creds <nas-username>`, which prompts rather than taking the
+password as an argument.
 
 ### Read size: cap it at 128 KB, or playback stutters
 
 **`rsize=131072` is not optional over Wi-Fi.** SMB3 defaults to 4 MB reads. On
-this link that is about a second of airtime delivered as a single slug, and
+a Wi-Fi link that is about a second of airtime delivered as a single slug, and
 everything else queues behind it - including AirPlay 2's PTP timing packets,
 which are what keep a HomePod stereo pair in sync. The audible symptom is a
 flanging or delay effect swelling in and out: the two speakers drift apart and
 you are hearing comb filtering. It sounds like a speaker fault or an OwnTone
 fault. It is neither.
 
-Measured 2026-09-20, pinging the gateway while reading from the NAS with
-`iflag=direct` so each read is exactly one wire request:
+Measured on the reference build, pinging the gateway while reading from the
+NAS with `iflag=direct` so each read is exactly one wire request:
 
 | Read size | Worst RTT | Pings over 200 ms | Throughput |
 |---|---|---|---|
@@ -297,10 +271,9 @@ with the cap, four consecutive minutes of playback peaked at 53.6 ms.
 
 This also disposes of a whole class of symptom that reads as a Wi-Fi fault:
 multi-second stalls, ping swinging from 7 ms to 400 ms, and the rx rate
-collapsing from 72.2 to 39.0 Mbit/s while tx holds steady. That is self-inflicted
-congestion from one large read, not a weak or broken radio. **Check the read
-size before blaming the link** - an afternoon went into the radio before anyone
-looked at `rsize`.
+collapsing from 72.2 to 39.0 Mbit/s while tx holds steady. That is
+self-inflicted congestion from one large read, not a weak or broken radio.
+**Check the read size before blaming the link.**
 
 Three details that matter:
 
@@ -317,57 +290,40 @@ Three details that matter:
   `.init-rescan` trigger file is not an option either. `PUT /api/update` is the
   only route.
 
-  **The nightly cron at 04:30 never ran, because the box is on a smart switch
-  that cuts power overnight.** `/etc/cron.d/owntone-rescan` was correct and
-  cron was healthy. Found 2026-09-20: OwnTone's `updated_at` was stuck three
-  days back, and two manual scans took it from 168 to 172 albums and 2085 to
-  2153 songs - four albums and 68 songs it had never seen.
+  `owntone-rescan.timer` runs it nightly. It is a systemd timer rather than a
+  cron entry because of `Persistent=true`: if the box is off at the scheduled
+  time - a power cut, or a smart plug that switches it off at night - cron
+  simply skips the run and never catches up, and a library can go days stale
+  without anyone noticing. The timer runs the missed job shortly after the next
+  boot, and `systemctl list-timers` shows when it last fired.
 
-  Measured across 2026-09-20/21: **power off at 22:07, back on at 05:36.** A
-  04:30 `cron.d` job falls squarely inside that window and never fires, and
-  without `anacron` cron never catches it up.
-
-  The switch is easy to forget - it was briefly asserted here that this box
-  runs continuously and is never switched off, which is wrong and sent a
-  morning's debugging after a box that was simply unplugged. Hence the times,
-  written down.
-
-  **Reading logs across that power cut: there is no RTC on a Pi.** On boot,
-  systemd restores the clock from `/var/lib/systemd/timesync/clock` - the last
-  time written before power was lost - and only jumps to the real time once NTP
-  syncs a few seconds later. So the first entries of every boot are stamped
-  with *last night's* time:
-
-      systemd[1]: System time advanced to timestamp on
-                  /var/lib/systemd/timesync/clock: Sun 2026-09-20 22:07:03 CEST
-
-  which makes `journalctl --list-boots` show a boot that appears to begin
-  before the previous one ended, and looks for all the world like the box never
-  rebooted. `uptime -s` is the honest answer. That saved timestamp is also the
-  most precise record of when power was cut, since timesyncd writes it
-  periodically: 22:07:03 on 2026-09-20, matching the last `wifi-watch` line at
-  22:07:22 and OwnTone's last line at 22:07:24, all stopping mid-stream with no
-  shutdown sequence.
-
-  Use the **Rescan library** button on the admin page's System tab. It reports
-  progress and the new counts. By hand:
+  To rescan now, use the **Rescan library** button on the admin page's System
+  tab, which reports progress and the new counts. By hand:
   `curl -X PUT http://jukebox.local:3689/api/update`.
-
-  **Done:** replaced by a systemd timer (`owntone-rescan.timer`) with
-  `Persistent=true`, which runs the missed job shortly after the switch powers
-  the box back up rather than skipping it. It also covers any other reason a
-  run is missed, and `systemctl list-timers` shows when it last fired - cron
-  offered neither, which is how a three-day-stale library went unnoticed.
 
 The initial bulk scan of ~2,000 files took **520 seconds** over SMB on Wi-Fi.
 That is a one-time cost; incremental scans are much faster.
 
-**Card mappings were unaffected by the move from SD to NAS** - all seven
-resolved with correct track counts immediately, because they store
-library-relative paths. The NAS uses the same `<Artist>/<Album>/` layout.
+Moving the library (SD card to NAS, or NAS to NAS) does not affect cards, as
+long as the `<Artist>/<Album>/` layout is the same: mappings store
+library-relative paths.
 
-The previous local copy is at `/srv/music.local`. Delete it to reclaim SD
-space once you are happy with the NAS.
+## Reading logs across a power cut
+
+**There is no RTC on a Pi.** On boot, systemd restores the clock from
+`/var/lib/systemd/timesync/clock` - the last time written before power was
+lost - and only jumps to the real time once NTP syncs a few seconds later. So
+the first entries of every boot after a power cut are stamped with the time
+power was lost:
+
+    systemd[1]: System time advanced to timestamp on
+                /var/lib/systemd/timesync/clock: <time power was lost>
+
+which makes `journalctl --list-boots` show a boot that appears to begin before
+the previous one ended, and looks for all the world like the box never
+rebooted. `uptime -s` is the honest answer. That saved timestamp is also the
+most precise record of when power was cut, since timesyncd writes it
+periodically.
 
 ## Rebuilding onto a new SD card
 
@@ -375,11 +331,12 @@ space once you are happy with the NAS.
 2. Burn Raspberry Pi OS Lite 64-bit. In Imager's settings: hostname
    `jukebox`, SSH with your public key, user `pi`, Wi-Fi, locale.
    **Give it the 2.4 GHz SSID**, and verify after first boot that
-   `nmcli con show` actually lists it — the imager's Wi-Fi silently did not
-   take on the 2026-09-15 rebuild, which is what caused that outage.
-   `provision.sh` now refuses to run if no Wi-Fi profile exists.
+   `nmcli con show` actually lists it — the imager's Wi-Fi can silently fail
+   to take. `provision.sh` refuses to run if no Wi-Fi profile exists.
+   Reserve an address for the Pi on your router while you are there.
 3. `git clone` this repo to `/home/pi/owntone-nfc`.
-4. `sudo bash deploy/provision.sh`
+4. `sudo bash deploy/provision.sh`, adding `NAS_SHARE=//<nas-ip>/<share>/<path>`
+   if the library is on a NAS, then `sudo nas-creds <nas-username>`.
 5. `sudo tar xzf jukebox-state-*.tar.gz -C /`
 6. Copy music to `/srv/music`, preserving `<Artist>/<Album>/`.
 7. `sudo systemctl restart owntone nfc-jukebox`
@@ -388,7 +345,7 @@ space once you are happy with the NAS.
 so they survive a rebuild. The only thing that breaks them is changing the
 `<Artist>/<Album>` folder layout.
 
-## How the record behaves (changed 2026-09-18)
+## How the record behaves
 
 Lifting a card **pauses**; putting the same card back **resumes where it left
 off**, however long it has been. The record stays on the platter until a
@@ -437,12 +394,10 @@ every 8ms. **Measure with the worst card you own, not the first one to hand.**
 ## Card technology: buy NTAG21x, not Mifare Classic
 
 The UID tells you which you have: **7 bytes starting `04`** is an NTAG (good);
-**4 bytes** is Mifare-Classic-style (flickers). As of 2026-09-20 the registry
-holds 78 of the bad kind and 54 of the good.
+**4 bytes** is Mifare-Classic-style (flickers).
 
-**The 4-byte cards already registered are fine. Do not "fix" them.** Measured
-2026-09-20 on `acd997ee` (José González/Veneer) sitting motionless on the built
-box:
+**4-byte cards you already have are fine. Do not "fix" them.** Measured on a
+4-byte card sitting motionless on the built box:
 
 | | |
 |---|---|
@@ -458,9 +413,9 @@ metronomic, p99.9 and worst differ by 0.1 ms, and `presence_debounce_s` at 0.5
 has ~19x margin over it. Raising the debounce buys nothing and costs lag on
 every lift. **This was proposed and rejected on the measurement.**
 
-It also clears flicker of the 2026-09-19 play/pause glitch on this very card:
-that was ~1.4s of absence, **53x the worst run this card produces**. Still
-unexplained; look for something mechanical, not for a timing value to tune.
+It also means a one-off play/pause glitch is not flicker: one seen on that same
+card was ~1.4s of absence, **53x the worst run it produces**. Look for
+something mechanical, not for a timing value to tune.
 
 Re-measure with `spikes/presence_check.py` rather than reasoning about it. Both
 probes used here pulse RSTPDN on GPIO20 first, because stopping the service

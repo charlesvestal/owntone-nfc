@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Take a fresh Raspberry Pi OS Bookworm Lite (64-bit) install to a working
-# jukebox. Idempotent: safe to re-run.
+# Take a fresh Raspberry Pi OS Lite (64-bit, Bookworm or later) install to a
+# working jukebox. Idempotent: safe to re-run.
 #
 # Usage:  sudo bash deploy/provision.sh
 set -euo pipefail
@@ -35,15 +35,15 @@ systemctl disable hciuart 2>/dev/null || true
 usermod -aG dialout "$USER_NAME"
 
 say "Wi-Fi: disable power save  <-- DO NOT SKIP"
-# With power save on, this Pi 4 associated fine and then received almost
+# With power save on, a Pi 4 associates fine and then receives almost
 # nothing: rx stuck at 6 Mbit/s against tx 260, DHCP timing out, no traffic
 # passing. It looks exactly like a dead network, a bad router or a shielded
-# antenna, and it cost hours to find. With it off: rx 433 Mbit/s.
+# antenna, and it is easy to lose hours to. With it off: rx 433 Mbit/s.
 #
 # This loop only *modifies* connections that already exist - Wi-Fi itself is
-# expected to come from Raspberry Pi Imager. When the imager's Wi-Fi did not
-# take, the loop silently matched nothing and provisioning reported success on
-# a box with no way onto the network. That cost an evening. Fail loudly now.
+# expected to come from Raspberry Pi Imager. If the imager's Wi-Fi did not
+# take, the loop would silently match nothing and report success on a box
+# with no way onto the network, so fail loudly instead.
 wifi_conns=$(nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="802-11-wireless"{print $1}')
 
 if [ -z "$wifi_conns" ]; then
@@ -59,9 +59,10 @@ if [ -z "$wifi_conns" ]; then
 
         sudo nmcli --ask dev wifi connect <SSID>
 
-    Prefer the 2.4 GHz SSID. This board's 5 GHz path fails at around -69 dBm
-    in the jukebox's normal position: it associates, completes the handshake,
-    and then never completes DHCP. See docs/runbook.md.
+    Prefer 2.4 GHz unless the box sits close to the router. A Pi 4's onboard
+    5 GHz receive can fail outright at moderate range: it associates,
+    completes the handshake, and then never completes DHCP. See
+    docs/runbook.md.
 
 EOF
   exit 1
@@ -116,7 +117,7 @@ install -m 0644 "$REPO/deploy/dropins/owntone-wait-for-music.conf" \
     /etc/systemd/system/owntone.service.d/mount.conf
 
 # Keep the journal across reboots. Volatile by default, which means every
-# restart erases the evidence -- and the failures on this box are intermittent
+# restart erases the evidence -- and an appliance's failures are intermittent
 # and get noticed days later. Capped, because an unbounded journal on an SD
 # card is how SD cards die.
 install -d /etc/systemd/journald.conf.d
@@ -133,11 +134,12 @@ journalctl --flush || true
 say "Music mount"
 # rsize is the load-bearing option here, not a tuning nicety. SMB3 defaults to
 # 4MB reads; over Wi-Fi that is roughly a second of airtime delivered as one
-# slug, and AirPlay 2's PTP timing packets queue behind it until a HomePod
-# stereo pair audibly loses sync - a flanging effect that reads as a speaker
-# fault. Measured on the box: 4MB reads put 70 of 80 pings over 200ms with a
-# 4517ms worst case; 128KB reads put zero over 200ms *and* ran faster
-# (2.0 vs 1.6 MB/s). Nothing is traded away. See docs/runbook.md.
+# slug, and AirPlay 2's PTP timing packets queue behind it until a stereo pair
+# (two HomePods, say) audibly loses sync - a flanging effect that reads as a
+# speaker fault. Measured on a Pi 4 over 2.4 GHz: 4MB reads put 70 of 80
+# pings over 200ms with a 4517ms worst case; 128KB reads put zero over 200ms
+# *and* ran faster (2.0 vs 1.6 MB/s). Nothing is traded away. See
+# docs/runbook.md.
 #
 # This lives here rather than only in the runbook because a rebuild onto a
 # fresh SD card would otherwise come back with the 4MB default, and the symptom
@@ -148,15 +150,21 @@ say "Music mount"
 # the player long enough that a card tap times out. With 600s that looped
 # every ~17 minutes, all day.
 #
-# echo_interval=5 is for Wi-Fi reconnects. This router hands the box a new
-# address on most re-associations, and the share's TCP connection is still
-# bound to the old one: packets from it are never sent, so nothing errors and
-# CIFS only gives up after three missed echoes. At the default 60s that is
-# 180 seconds in which every card tap times out -- it happened about a dozen
-# times in two days. At 5s it reconnects (from the new address) in ~15s.
-# Killing the stale socket from a NetworkManager hook was tried and does not
-# work: this kernel has no socket-destroy support, and the dead socket's
+# echo_interval=5 is for Wi-Fi reconnects that change the box's address. Some
+# routers hand out a new address on a re-association, and the share's TCP
+# connection stays bound to the old one: its packets are never sent, so
+# nothing errors and CIFS only gives up after three missed echoes. At the
+# default 60s that is 180 seconds in which every card tap times out. At 5s it
+# reconnects from the new address in ~15s. A DHCP reservation for the Pi
+# avoids the address change altogether and is worth making too.
+# Killing the stale socket from a NetworkManager hook does not work: the
+# Raspberry Pi kernel has no socket-destroy support, and the dead socket's
 # packets never reach netfilter for a reset rule to catch.
+
+# Credentials stay out of fstab and out of this script. nas-creds prompts for
+# the password and writes ${NAS_CREDS} readable by root only.
+install -m 0755 "$REPO/deploy/nas-creds.sh" /usr/local/sbin/nas-creds
+
 MOUNT_OPTS="credentials=${NAS_CREDS},uid=${USER_NAME},gid=${USER_NAME}"
 MOUNT_OPTS="${MOUNT_OPTS},file_mode=0444,dir_mode=0555,iocharset=utf8,ro"
 MOUNT_OPTS="${MOUNT_OPTS},nofail,_netdev,x-systemd.automount"
@@ -175,7 +183,7 @@ if [ -n "$NAS_SHARE" ]; then
   rm -f "$fstab_tmp"
   systemctl daemon-reload
   echo "  /etc/fstab entry for $MUSIC written (original kept at /etc/fstab.orig)"
-  echo "  Credentials are NOT written here - see 'sudo /usr/local/sbin/nas-creds'."
+  echo "  Credentials are NOT written here - run 'sudo nas-creds <nas-username>'."
 else
   echo "  NAS_SHARE unset, leaving /etc/fstab alone."
   echo "  If $MUSIC is already mounted, confirm it has rsize=131072:"
@@ -186,11 +194,10 @@ say "Nightly library rescan"
 # A read-only network mount sends no inotify events and cannot carry OwnTone's
 # .init-rescan trigger file, so new albums are invisible until it is told.
 #
-# A systemd timer rather than cron, and the reason is Persistent=true: this box
-# sits on a smart switch that cuts power overnight -- measured off at 22:07,
-# back at 05:36 -- so a 04:30 cron entry never fires and cron does not catch up.
-# The timer runs the missed job shortly after the next boot instead.
-# Found the hard way -- the cron it replaces had never run once.
+# A systemd timer rather than cron, and the reason is Persistent=true: if the
+# box is off at the scheduled time -- a power cut, or a smart plug that
+# switches it off at night -- a cron entry simply never fires and cron does not
+# catch up. The timer runs the missed job shortly after the next boot instead.
 install -m 0644 "$REPO/deploy/owntone-rescan.service" \
     /etc/systemd/system/owntone-rescan.service
 install -m 0644 "$REPO/deploy/owntone-rescan.timer" \
@@ -204,7 +211,7 @@ if ! command -v owntone >/dev/null; then
   wget -q -O - https://raw.githubusercontent.com/owntone/owntone-apt/refs/heads/master/repo/rpi/owntone.gpg \
     | gpg --dearmor --output /usr/share/keyrings/owntone-archive-keyring.gpg
   # Match the running release rather than hardcoding one: OwnTone publishes
-  # bookworm, trixie and others, and this box may be reflashed onto a newer
+  # bookworm, trixie and others, and a box may be reflashed onto a newer
   # image to chase a Wi-Fi firmware fix.
   CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
   wget -q -O /etc/apt/sources.list.d/owntone.list \
