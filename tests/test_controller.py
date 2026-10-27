@@ -1456,6 +1456,26 @@ def test_a_noted_scan_learns_an_unregistered_card(ctx):
     assert "ffff" in (controller.last_error or "")
 
 
+def test_onboard_reader_reannouncing_the_playing_card_does_not_clobber_a_scan(ctx):
+    """The reverse of test_a_noted_scan_never_disturbs_a_playing_record.
+
+    A desk scan sets last_seen_uid for registration; the onboard reader
+    then re-announces the still-seated, already-playing card (flicker,
+    debounce expiry). That must not stomp the desk scan's UID back to the
+    playing card's.
+    """
+    controller, owntone, _, _ = ctx
+    controller.on_card_present("aaaa")
+    owntone.calls.clear()
+
+    controller.note_scan("bbbb")                  # desk scan of a new card
+    controller.on_card_present("aaaa")             # reader re-announces playing card
+
+    assert not owntone.calls
+    assert controller.state is State.PLAYING
+    assert controller.last_seen_uid == "bbbb"
+
+
 def test_a_noted_scan_clears_the_error_for_a_known_card(ctx):
     controller, _, _, _ = ctx
     controller.note_scan("ffff")

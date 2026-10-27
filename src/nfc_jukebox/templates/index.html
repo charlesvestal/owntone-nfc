@@ -22,6 +22,8 @@
   #dupwarn[hidden] { display: none; }
   .warn { background:#fdf0ef; border-left:4px solid #c9584f;
           padding:8px 12px; margin:10px 0; color:#7d2f28; }
+  #known.blank { background:#e8f6ea; border-left:4px solid #2e8b45;
+                 padding:8px 12px; color:#1d5e2e; font-weight:600; }
 
   /* Tabs. The page had grown to four unrelated jobs in one scroll: what is
      playing, registering a card, making the artwork for one, and shutting the
@@ -263,6 +265,9 @@ async function refresh() {
   }
 
   const known = document.getElementById('known') || {};
+  // Green for a blank card, so a stale previous card is never mistaken for it.
+  if (known.classList) known.classList.toggle('blank',
+                                              !!s.last_seen_uid && !s.last_seen_known);
   if (!s.last_seen_uid) {
     known.textContent = '\u00a0';
   } else if (s.last_seen_known) {

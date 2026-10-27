@@ -202,6 +202,17 @@ class Controller:
             self._on_card_present(uid)
 
     def _on_card_present(self, uid: str) -> None:
+        # A still-seated card re-announced by the reader (flicker, debounce
+        # expiry, a bump). Restarting the album mid-listen because the reader
+        # spoke twice would be maddening, so do nothing -- except bump the
+        # timestamp. Checked before the last_seen_uid write below so this
+        # doesn't clobber a desk scan of a different, unregistered card with
+        # the still-playing one's UID.
+        if not self.management_mode \
+                and self.state is State.PLAYING and uid == self._last_uid:
+            self.last_seen_at = self._clock()
+            return
+
         # Recorded before the lookup so unregistered cards are still learnable.
         self.last_seen_uid = uid
         self.last_seen_at = self._clock()
@@ -210,12 +221,6 @@ class Controller:
         # card is still learnable, but before anything reaches OwnTone.
         if self.management_mode:
             self._note_identified(uid)
-            return
-
-        # A still-seated card re-announced by the reader. Restarting the album
-        # mid-listen because the reader spoke twice would be maddening, so do
-        # nothing at all.
-        if self.state is State.PLAYING and uid == self._last_uid:
             return
 
         card = self._cards.get(uid)
