@@ -30,6 +30,7 @@ import urllib.request
 
 try:
     from smartcard.System import readers
+    from smartcard.scard import SCARD_LEAVE_CARD
     from smartcard.util import toHexString
 except ImportError:                                     # pragma: no cover
     sys.exit("pyscard is not installed:  python3 -m pip install pyscard")
@@ -99,11 +100,12 @@ def main() -> int:
             conn = wait_for_card(reader, timeout=None)
             if conn is None:                            # only on a timeout
                 continue
-            data, sw1, sw2 = conn.transmit(GET_UID)
-            uid = toHexString(data).replace(" ", "").lower() \
-                if (sw1, sw2) == (0x90, 0x00) else None
-            conn.disconnect()
-            if uid and uid != last:
+            uid = read_uid(reader, conn)
+            if uid is None:
+                # Say so: the admin page still shows the previous card, and
+                # saving there now would assign this album to that one.
+                print("  read failed -- lift the card and tap again", flush=True)
+            elif uid != last:
                 last = uid
                 print("  " + (uid if args.dry_run else post_scan(args.host, uid)),
                       flush=True)
@@ -116,10 +118,30 @@ def main() -> int:
     return 0
 
 
+def read_uid(reader, conn, attempts: int = 3) -> str | None:
+    """The UID of the card on the reader, or None if it cannot be read."""
+    for attempt in range(attempts):
+        try:
+            if attempt:
+                time.sleep(SETTLE_S)
+                conn = reader.createConnection()
+                conn.connect(disposition=SCARD_LEAVE_CARD)
+            data, sw1, sw2 = conn.transmit(GET_UID)
+            conn.disconnect()
+            if (sw1, sw2) == (0x90, 0x00):
+                return toHexString(data).replace(" ", "").lower()
+        except Exception:                               # noqa: BLE001
+            pass
+    return None
+
+
 def card_present(reader) -> bool:
     conn = reader.createConnection()
     try:
-        conn.connect()
+        # pyscard otherwise unpowers the card on every disconnect, and this
+        # polls five times a second -- the next read then fails with
+        # "Card is unpowered".
+        conn.connect(disposition=SCARD_LEAVE_CARD)
         conn.disconnect()
         return True
     except Exception:                                   # noqa: BLE001
@@ -132,7 +154,7 @@ def wait_for_card(reader, timeout: float | None = 15.0):
     while deadline is None or time.monotonic() < deadline:
         conn = reader.createConnection()
         try:
-            conn.connect()
+            conn.connect(disposition=SCARD_LEAVE_CARD)
             return conn
         except Exception:                               # noqa: BLE001
             time.sleep(SETTLE_S)
